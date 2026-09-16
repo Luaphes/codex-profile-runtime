@@ -2,7 +2,7 @@
 
 ## Goals
 
-Codex Profile Runtime Manager v0.1 的目标是提供一层轻量、透明、可审计的 macOS runtime/profile glue layer：
+Codex Profile Runtime Manager v0.1 的目标是把已经在 macOS 上人工验证过的多 profile 启动流程收敛成一个小型、透明的 runtime glue CLI：
 
 - 定义 profile。
 - 按 profile 启动独立的 ChatGPT/Codex Desktop runtime。
@@ -11,10 +11,11 @@ Codex Profile Runtime Manager v0.1 的目标是提供一层轻量、透明、可
 - 支持多个 ChatGPT Desktop 实例并发运行。
 - 列出当前运行实例。
 - 安全停止指定 profile。
-- 为指定 profile 注入独立代理配置。
-- 记录可审计的启动、发现和停止事件。
+- 为指定 profile 使用独立代理。
 
 Manager 只负责路径、参数、环境和进程生命周期 glue；它不拥有或解释 ChatGPT/Codex 的认证协议和 session 格式。
+
+指导原则是：把手工验证过的多 profile 启动过程变成一个小而可观察的 CLI，而不是构建通用 runtime orchestration platform。
 
 ## Non-goals
 
@@ -28,6 +29,8 @@ v0.1 明确不包含：
 - Session migration。
 - 自动处理、复制或迁移 auth token。
 - 重写 Codex 或替代 ChatGPT Desktop。
+- 持久化 audit subsystem 或 JSONL event logging。
+- profile-specific 的高级路径覆盖；`CODEX_HOME` 和 Electron user-data 路径在 v0.1 中自动派生。
 
 ## Technical approach
 
@@ -42,9 +45,9 @@ cpr list [--json]
 cpr stop <profile> [--force]
 ```
 
-不使用数据库。`list` 的运行事实以实时进程扫描为准；磁盘上的 state 只用于审计和辅助恢复，不能作为唯一运行状态来源。
+不使用数据库、daemon 或持久化 PID 状态。`list` 的运行事实以每次执行时的实时进程扫描为准。
 
-建议使用 JSON 配置和 JSONL 审计日志，配套 JSON Schema 做严格校验。
+配置模型保持很小：使用 Go structs 加显式校验，不把 JSON Schema 作为 v0.1 要求。
 
 ### 语言选择
 
@@ -52,24 +55,27 @@ cpr stop <profile> [--force]
 
 - 可生成单一 macOS CLI 二进制，不依赖 Node/Electron runtime。
 - 标准库足以覆盖配置、文件、进程启动、信号和 JSON。
-- 易于编写配置、进程识别和停止逻辑的单元测试。
+- 易于为配置、进程识别和停止逻辑编写单元测试。
 - 可在 Darwin 适配层调用 `libproc`/`sysctl` 获取 PID、PPID、启动时间、executable path 和原始 argv。
 
 v0.1 不需要 SwiftUI、AppKit 或原生 GUI。若未来需要签名 GUI、Menu Bar app 或更深的 macOS 集成，再评估 Swift。
 
 ### Launch
 
-推荐使用已经人工验证过的 `open -n ... --args ...` 路径启动 ChatGPT Desktop，并传递：
+v0.1 只保留已经人工验证过的一个启动路径：使用 `open -n ... --args ...` 启动 ChatGPT Desktop。
 
-- profile-specific `--user-data-dir`。
-- profile-specific `--proxy-server`。
-- profile-specific `CODEX_HOME` 和代理环境变量。
+启动参数和环境由 profile 意图派生：
 
-启动后必须做启动证据校验：确认目标进程确实使用了预期的 data directory、代理参数和可验证的环境配置。不能因为 `open` 返回成功，就直接把 profile 标记为 running。
+- `--user-data-dir` 使用 profile id 和 runtime root 派生的目录。
+- `--proxy-server` 使用 profile 的单一 `proxy` 值派生。
+- `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY` 使用同一个 `proxy` 值派生。
+- `CODEX_HOME` 使用 profile id 和 runtime root 派生的目录。
 
-macOS LaunchServices 对调用方环境变量的继承可能随应用版本变化。如果无法确认 `CODEX_HOME` 已传入目标 runtime，应直接报告启动失败，而不是静默宣称隔离成功。必要时可在同一个 launcher abstraction 下增加 direct-exec backend，但不应扩大 v0.1 的用户-facing scope。
+启动后必须严格验证：目标进程的 executable path 属于预期的 `ChatGPT.app`，且 argv 中包含精确匹配的 `--user-data-dir`。不能因为 `open` 返回成功，就直接把 profile 标记为 running。
 
-环境变量只注入目标启动上下文，不修改当前 shell 或系统级全局环境。
+v0.1 不要求把“目标进程继承了 `CODEX_HOME`”作为启动成功的硬条件。`CODEX_HOME` 的隔离通过真实 ChatGPT/Codex 集成测试验证；进程识别仍以 executable path 和 exact `--user-data-dir` 为准。
+
+环境变量只注入目标启动上下文，不修改当前 shell 或系统级全局环境。v0.1 不提供 direct-exec fallback；只有后续证据表明单一启动路径不足时，才重新评估。
 
 ### Runtime files
 
@@ -78,13 +84,10 @@ macOS LaunchServices 对调用方环境变量的继承可能随应用版本变�
 ```text
 ~/Library/Application Support/CodexProfileRuntime/
 ├── config.json
-├── profiles/
-│   └── <profile-id>/
-│       ├── chatgpt-user-data/
-│       └── codex-home/
-├── state/
-└── audit/
-    └── events.jsonl
+└── profiles/
+    └── <profile-id>/
+        ├── chatgpt-user-data/
+        └── codex-home/
 ```
 
 `chatgpt-user-data/` 和 `codex-home/` 只作为路径传递给目标程序。Manager 不读取、复制或解析其中的 auth/session 内容。
@@ -109,11 +112,7 @@ codex-profile-runtime/
 │   ├── launch/
 │   ├── process/
 │   │   └── darwin/
-│   ├── runtime/
-│   └── audit/
-│
-├── schema/
-│   └── profile.schema.json
+│   └── runtime/
 │
 ├── examples/
 │   └── config.json
@@ -127,53 +126,75 @@ codex-profile-runtime/
     └── integration/
 ```
 
-核心实现应保持在 CLI、配置、启动、进程识别、运行时路径和审计六个边界内，不引入 GUI、daemon 或 provider abstraction。
+核心实现保持在 CLI、配置、启动、进程识别和运行时路径五个边界内，不引入 GUI、daemon、audit 或 provider abstraction。
 
 ## Profile config schema
 
-配置的核心字段建议如下：
+### 最小配置
+
+profile 主要表达意图。最小配置可以只有 profile id 和可选代理：
 
 ```json
 {
-  "schema_version": 1,
-  "chatgpt_app": "/Applications/ChatGPT.app",
-  "runtime_root": "~/Library/Application Support/CodexProfileRuntime",
-  "profiles": [
-    {
-      "id": "work",
-      "display_name": "Work",
-      "user_data_dir": "~/Library/Application Support/CodexProfileRuntime/profiles/work/chatgpt-user-data",
-      "codex_home": "~/Library/Application Support/CodexProfileRuntime/profiles/work/codex-home",
-      "proxy": {
-        "chromium_server": "socks5://127.0.0.1:1080",
-        "environment": {
-          "HTTP_PROXY": "socks5://127.0.0.1:1080",
-          "HTTPS_PROXY": "socks5://127.0.0.1:1080",
-          "ALL_PROXY": "socks5://127.0.0.1:1080"
-        },
-        "no_proxy": [
-          "127.0.0.1",
-          "localhost"
-        ]
-      }
+  "profiles": {
+    "ninibin": {
+      "proxy": "socks5://127.0.0.1:18081"
     }
-  ]
+  }
 }
 ```
 
-约束：
+### 全局可选设置
 
-- `id` 全局唯一，建议限制为小写字母、数字、`-`、`_`、`.`。
-- 所有 profile 的 `user_data_dir` 必须唯一。
-- 所有 profile 的 `codex_home` 必须唯一。
-- 路径展开后必须 canonicalize，避免符号链接和 `../` 造成身份混淆。
-- 代理只允许显式的 allowlist 字段。
-- v0.1 不支持代理用户名密码，避免 secret 出现在配置和审计日志中。
+如果需要改变默认值，可以在配置顶层指定：
+
+```json
+{
+  "runtime_root": "~/Library/Application Support/CodexProfileRuntime",
+  "chatgpt_app": "/Applications/ChatGPT.app",
+  "profiles": {
+    "ninibin": {
+      "proxy": "socks5://127.0.0.1:18081"
+    },
+    "personal": {}
+  }
+}
+```
+
+默认值：
+
+- `runtime_root`：`~/Library/Application Support/CodexProfileRuntime`
+- `chatgpt_app`：目标机器上的 ChatGPT Desktop app path
+
+对于 profile `<id>`，Manager 自动派生：
+
+```text
+<runtime_root>/profiles/<id>/codex-home
+<runtime_root>/profiles/<id>/chatgpt-user-data
+```
+
+v0.1 不允许 profile 自定义 `codex_home` 或 `user_data_dir`。这样 profile identity、路径隔离和 stop 目标之间保持一一对应；高级路径覆盖可以在确有技术需求时单独设计。
+
+### Proxy
+
+`proxy` 是 profile proxy 的唯一 source of truth：
+
+- 有值时，使用该值派生 `--proxy-server`。
+- 同时使用该值派生 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`。
+- 缺省时，不设置这些代理参数和环境变量。
+- v0.1 不接受独立的 `chromium_server`、`HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 配置。
+- v0.1 不支持把代理用户名密码写入配置。
+
+### Validation
+
+使用 Go structs 和显式校验：
+
+- profile id 必须非空，并限制为可预测的安全字符集合。
+- profile id 在 map 中天然唯一。
+- 派生后的 profile 路径必须 canonicalize。
+- proxy 必须是支持的 URI 格式；非法 proxy 应在 launch 前失败。
+- 不允许任意环境变量注入。
 - 不提供 `provider`、`account`、`auth_token`、`session` 等字段。
-- `proxy` 缺省表示不设置代理。
-- 不建议允许任意环境变量注入，避免 Manager 变成通用环境劫持器。
-
-`CODEX_HOME` 是由 Manager 传入的运行时路径，不意味着 Manager 会读取、复制或迁移其中的认证状态。
 
 ## Runtime/process identification
 
@@ -183,24 +204,24 @@ codex-profile-runtime/
 
 ```text
 ChatGPT.app executable path
-+ exact --user-data-dir path
++ exact --user-data-dir path derived from profile id
 ```
 
-`CODEX_HOME` 和代理参数可用于启动后校验，但不应作为唯一识别依据，因为它们通常位于环境变量中，不一定可靠地出现在所有子进程中。
+`CODEX_HOME` 仍然会在启动上下文中按 profile 派生并传入，但不作为唯一识别依据；它不一定可靠地出现在所有子进程中。
 
 识别流程：
 
 1. 读取 profile 配置并得到 canonical `user_data_dir`。
 2. 枚举当前用户的进程。
 3. 找到可执行文件位于目标 `ChatGPT.app` 内、属于 ChatGPT 主进程且 argv 中精确包含 `--user-data-dir=<path>` 的进程。
-4. 记录 PID、PPID、进程启动时间、executable path、原始 argv 和 profile identity hash。
+4. 记录 PID、PPID、进程启动时间、executable path 和原始 argv。
 5. 用 PPID 关系递归收集 helper tree。
-6. 对 helper 只接受可执行文件位于同一个 ChatGPT.app bundle，或 argv 中同样带有该 profile 的精确 `user_data_dir` 的进程。
-7. `list` 每次重新扫描进程；磁盘 state 只用于审计和辅助恢复。
+6. 对 helper 只接受可执行文件位于同一个 ChatGPT.app bundle，或 argv 中同样带有该 profile 精确 `user_data_dir` 的进程。
+7. `list` 每次重新扫描进程，不依赖 PID 文件或持久化运行状态。
 
 如果使用 `open -n`，Manager 不应依赖 `open` 的 PID，因为它很快退出。应在启动后轮询进程表，直到找到带有精确 `user_data_dir` 的 ChatGPT 主进程；超时则启动失败。
 
-配置校验必须阻止两个 profile 共享同一个 `user_data_dir` 或 `codex_home`。否则无法安全地区分它们。
+启动验证严格要求 executable path 和 exact `--user-data-dir`；不把运行时 `CODEX_HOME` 环境继承证明作为 launch 成功条件。`CODEX_HOME` 隔离由 integration tests 覆盖。
 
 ## Safe stop strategy
 
@@ -216,30 +237,34 @@ ChatGPT.app executable path
 停止前：
 
 1. 重新扫描目标 profile。
-2. 对每个候选 PID 重新验证：PID 仍存在、进程启动时间未变化、executable path 仍属于目标 ChatGPT.app、`user_data_dir` 仍精确匹配，且 profile 配置没有路径冲突。
+2. 对每个候选 PID 重新验证：PID 仍存在、进程启动时间未变化、executable path 仍属于目标 ChatGPT.app、`user_data_dir` 仍精确匹配。
 3. 任何候选出现歧义或身份不匹配时，立即中止，不发送信号。
 4. 先发送 `SIGTERM`，等待退出并重新扫描。
 5. 只有显式使用 `--force` 时，才对仍然通过身份校验的目标进程发送 `SIGKILL`。
 6. 最终再次扫描，确认目标 profile 已不存在，同时确认其他 profile 的 PID 仍存活。
 
-如果用户让两个实例共享同一个 `user_data_dir`，它们在 Manager 看来就是同一个 profile，无法安全区分；配置校验必须禁止这种情况。
+由于 v0.1 的路径由 profile id 自动派生，不同 profile 不会共享同一个 `user_data_dir` 或 `codex_home`。如果未来支持路径覆盖，必须保留相同的唯一性校验。
 
 ## Acceptance criteria
 
 ### Configuration
 
-- 能加载并严格校验 profile 配置。
-- 重复 profile ID、重复路径、非法代理地址都会失败。
+- 能使用 Go structs 加显式校验加载小型 profile 配置。
+- 最小 profile 配置只需 profile id 和可选的单一 `proxy` 字段。
+- `codex_home` 和 `user_data_dir` 能从 profile id 和 runtime root 稳定派生。
+- 非法 profile id 或 proxy 地址在 launch 前失败。
 - 不读取或复制任何 auth/session/token 内容。
+- 不要求或生成 JSON Schema、audit log 或持久化 PID 状态。
 
 ### Launch
 
 - `launch A` 能启动 profile A。
 - `launch B` 能同时启动 profile B。
-- 两个实例使用不同的 `user_data_dir` 和 `CODEX_HOME`。
+- 两个实例使用不同的派生 `user_data_dir` 和 `CODEX_HOME`。
 - 两个实例可以同时访问本地项目。
-- 代理参数和环境变量只作用于目标实例。
-- 启动失败或无法证明隔离时，不写入“运行成功”状态。
+- `--proxy-server`、`HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY` 全部从同一个 profile `proxy` 值派生。
+- 启动后能严格验证目标 executable path 和 exact `--user-data-dir`。
+- `CODEX_HOME` 隔离通过真实 integration tests 验证，而不是作为复杂的 runtime launch proof。
 
 ### List
 
@@ -247,7 +272,7 @@ ChatGPT.app executable path
 - 能识别 ChatGPT 主进程及其 helper tree。
 - Manager 退出后再次运行 `list`，仍能正确发现存活实例。
 - 支持机器可读的 `--json` 输出。
-- 不显示或记录 proxy credentials、auth token 等敏感内容。
+- 不依赖过期 PID 文件或持久化运行状态。
 
 ### Stop
 
@@ -258,22 +283,15 @@ ChatGPT.app executable path
 - 身份有歧义时宁可失败，也不发送信号。
 - 停止完成后重新扫描确认目标进程已消失。
 
-### Audit
-
-- launch/list/stop 都产生结构化审计事件。
-- 审计记录包含 profile、PID、启动时间、配置 hash、结果和信号。
-- 审计日志不包含 auth/session 内容和代理密码。
-- 不需要 daemon 也能重建基本运行事实。
-
 ## Technical risks
 
 ### 1. ChatGPT/Electron 更新改变启动行为
 
-参数、helper 结构、单实例锁或 bundle 路径可能变化。必须把 ChatGPT 版本和启动证据纳入集成测试。
+参数、helper 结构、单实例锁或 bundle 路径可能变化。必须把 ChatGPT 版本、启动参数和 executable path 验证纳入 integration tests。
 
 ### 2. LaunchServices 的环境变量继承不稳定
 
-`--proxy-server` 通常可直接验证，但 `CODEX_HOME` 是否传入后续子进程不能只靠假设。必须启动后校验，必要时使用 direct-exec backend。
+`--proxy-server` 和环境变量的实际继承行为可能随应用版本变化。v0.1 不把 `CODEX_HOME` 的运行时继承证明作为 launch 硬条件，而是用真实集成测试验证隔离结果。
 
 ### 3. PID 复用和进程树变化导致停止风险
 
@@ -283,10 +301,10 @@ helper 可能被重新挂载，PID 也可能复用。需要启动时间、精确
 
 Keychain、全局缓存、共享 IPC、系统级应用状态可能仍然共享。v0.1 只能承诺 `CODEX_HOME` 和 Electron `user-data-dir` 层面的隔离。
 
-### 5. 代理语义和流量覆盖范围不确定
+### 5. 代理语义和运行状态观察范围有限
 
-Chromium 参数、环境变量、DNS、WebSocket、QUIC 和子进程的代理行为可能不同。v0.1 应明确支持范围，并通过真实连通性测试验证，而不是仅记录配置。
+Chromium 参数、环境变量、DNS、WebSocket、QUIC 和子进程的代理行为可能不同；同时，没有 daemon 或持久化日志意味着 `list` 只反映当前时刻的进程状态。v0.1 应明确这些边界，并通过真实连通性和进程集成测试验证。
 
 ## Scope boundary
 
-v0.1 只实现“配置解析 + 启动证据 + 进程扫描 + 安全停止 + 审计日志”五个边界内的 runtime glue。它不实现 provider switching、GUI、daemon、workspace 管理、session migration 或自动 auth/token 处理。
+v0.1 只实现“配置解析 + 自动路径派生 + 单一启动路径 + 进程扫描 + 安全停止”的 runtime glue。它不实现 provider switching、GUI、daemon、workspace 管理、session migration、audit subsystem 或自动 auth/token 处理。
