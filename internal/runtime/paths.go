@@ -88,10 +88,6 @@ func PrepareProfilePaths(runtimeRoot, profileID string, expected ProfilePaths) (
 	if err != nil {
 		return ProfilePaths{}, err
 	}
-	if expected != derived {
-		return ProfilePaths{}, fmt.Errorf("profile paths do not match derived paths")
-	}
-
 	if err := os.MkdirAll(runtimeRoot, 0o700); err != nil {
 		return ProfilePaths{}, fmt.Errorf("create runtime root: %w", err)
 	}
@@ -102,6 +98,17 @@ func PrepareProfilePaths(runtimeRoot, profileID string, expected ProfilePaths) (
 	realRuntimeRoot, err = filepath.Abs(realRuntimeRoot)
 	if err != nil {
 		return ProfilePaths{}, fmt.Errorf("resolve runtime root absolute path: %w", err)
+	}
+	canonicalDerived, err := DeriveProfilePaths(realRuntimeRoot, profileID)
+	if err != nil {
+		return ProfilePaths{}, err
+	}
+	if !matchesDerivedPath(expected.CodexHome, derived.CodexHome, canonicalDerived.CodexHome) ||
+		!matchesDerivedPath(expected.UserDataDir, derived.UserDataDir, canonicalDerived.UserDataDir) {
+		return ProfilePaths{}, fmt.Errorf("profile paths do not match derived paths")
+	}
+	if err := secureDirectory(realRuntimeRoot, "runtime root"); err != nil {
+		return ProfilePaths{}, err
 	}
 
 	profilesRoot := filepath.Join(realRuntimeRoot, "profiles")
@@ -181,14 +188,23 @@ func ensureDirectoryWithin(path, runtimeRoot string) error {
 		if !isWithin(runtimeRoot, realPath) {
 			return fmt.Errorf("runtime directory symlink escapes runtime root: %q -> %q", path, realPath)
 		}
-		info, err = os.Stat(path)
-		if err != nil {
-			return fmt.Errorf("inspect runtime directory symlink target %q: %w", path, err)
-		}
+		return fmt.Errorf("manager-owned runtime path must not be a symlink: %q -> %q", path, realPath)
 	}
 
 	if !info.IsDir() {
 		return fmt.Errorf("runtime path is not a directory: %q", path)
+	}
+	return secureDirectory(path, "runtime directory")
+}
+
+func matchesDerivedPath(actual, lexical, canonical string) bool {
+	actual = filepath.Clean(actual)
+	return actual == filepath.Clean(lexical) || actual == filepath.Clean(canonical)
+}
+
+func secureDirectory(path, description string) error {
+	if err := os.Chmod(path, 0o700); err != nil {
+		return fmt.Errorf("secure %s %q: %w", description, path, err)
 	}
 	return nil
 }

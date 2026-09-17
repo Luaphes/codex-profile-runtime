@@ -92,24 +92,24 @@ func (s darwinScanner) FindMain(executablePath, userDataDir string) (Info, bool,
 }
 
 func listCurrentUserPIDs(uid uint32) ([]int, error) {
-	bufferSize := int(C.cpr_list_all_pids(nil, 0))
-	if bufferSize <= 0 {
+	pidCount := int(C.cpr_list_all_pids(nil, 0))
+	if pidCount <= 0 {
 		return nil, nil
 	}
 
 	pidSize := int(unsafe.Sizeof(C.pid_t(0)))
 	for {
-		pids := make([]C.pid_t, bufferSize/pidSize+1)
+		pids := make([]C.pid_t, pidCount)
 		result := int(C.cpr_list_all_pids(&pids[0], C.int(len(pids)*pidSize)))
-		if result < 0 {
-			return nil, fmt.Errorf("enumerate processes")
+		count, retry, err := pidListResult(result, len(pids))
+		if err != nil {
+			return nil, err
 		}
-		if result > len(pids)*pidSize {
-			bufferSize = result
+		if retry {
+			pidCount = count
 			continue
 		}
 
-		count := result / pidSize
 		currentUser := make([]int, 0, count)
 		for _, rawPID := range pids[:count] {
 			pid := int(rawPID)
@@ -120,6 +120,18 @@ func listCurrentUserPIDs(uid uint32) ([]int, error) {
 		}
 		return currentUser, nil
 	}
+}
+
+// pidListResult treats proc_listallpids' return value as a PID count, while
+// the C buffer argument remains sized in bytes.
+func pidListResult(returnedCount, bufferPIDCapacity int) (int, bool, error) {
+	if returnedCount < 0 {
+		return 0, false, fmt.Errorf("enumerate processes")
+	}
+	if returnedCount > bufferPIDCapacity {
+		return returnedCount, true, nil
+	}
+	return returnedCount, false, nil
 }
 
 func processPath(pid int) (string, error) {
