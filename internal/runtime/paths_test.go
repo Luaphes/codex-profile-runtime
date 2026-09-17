@@ -20,6 +20,22 @@ func TestNormalizePathDoesNotRequireExistingDirectory(t *testing.T) {
 	}
 }
 
+func TestNormalizePathRejectsRelativeRuntimePath(t *testing.T) {
+	if _, err := NormalizePath("relative/runtime-root", t.TempDir()); err == nil {
+		t.Fatal("NormalizePath() unexpectedly accepted a relative path")
+	}
+}
+
+func TestNormalizeConfigPathAllowsRelativeConfigPath(t *testing.T) {
+	got, err := NormalizeConfigPath("relative/config.json", t.TempDir())
+	if err != nil {
+		t.Fatalf("NormalizeConfigPath() error = %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("NormalizeConfigPath() = %q, want absolute path", got)
+	}
+}
+
 func TestDefaultConfigPath(t *testing.T) {
 	homeDir := "/Users/example"
 	want := filepath.Join(homeDir, "Library", "Application Support", "CodexProfileRuntime", "config.json")

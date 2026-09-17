@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Luaphes/codex-profile-runtime/internal/runtime"
@@ -50,7 +51,7 @@ type ResolvedProfile struct {
 
 // Load reads, strictly decodes, validates, and resolves one config file.
 func Load(path, homeDir string) (ResolvedConfig, error) {
-	resolvedPath, err := runtime.NormalizePath(path, homeDir)
+	resolvedPath, err := runtime.NormalizeConfigPath(path, homeDir)
 	if err != nil {
 		return ResolvedConfig{}, fmt.Errorf("config path: %w", err)
 	}
@@ -185,7 +186,26 @@ func validateProxy(raw string) error {
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("query and fragment are not supported")
 	}
+	if err := validateProxyPort(parsed); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func validateProxyPort(parsed *url.URL) error {
+	port := parsed.Port()
+	if port == "" {
+		if strings.HasSuffix(parsed.Host, ":") {
+			return fmt.Errorf("port must be a decimal integer from 1 to 65535")
+		}
+		return nil
+	}
+
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		return fmt.Errorf("port must be a decimal integer from 1 to 65535")
+	}
 	return nil
 }
 

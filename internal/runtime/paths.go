@@ -27,28 +27,36 @@ func DefaultConfigPath(homeDir string) string {
 	return filepath.Join(DefaultRuntimeRoot(homeDir), "config.json")
 }
 
-// NormalizePath performs lexical normalization and absolute path resolution.
-// It intentionally does not resolve symlinks, because the path may not exist yet.
+// NormalizePath performs lexical normalization for a stable runtime path.
+// Stable runtime paths must be absolute or use the ~/... form. It intentionally
+// does not resolve symlinks, because the path may not exist yet.
 func NormalizePath(rawPath, homeDir string) (string, error) {
-	if rawPath == "" {
-		return "", fmt.Errorf("path must not be empty")
-	}
-
-	expanded, err := expandHome(rawPath, homeDir)
+	cleaned, err := expandAndClean(rawPath, homeDir)
 	if err != nil {
 		return "", err
 	}
-
-	cleaned := filepath.Clean(expanded)
 	if !filepath.IsAbs(cleaned) {
-		absolute, err := filepath.Abs(cleaned)
-		if err != nil {
-			return "", fmt.Errorf("resolve absolute path: %w", err)
-		}
-		cleaned = absolute
+		return "", fmt.Errorf("path must be absolute or use ~/...: %q", rawPath)
+	}
+	return cleaned, nil
+}
+
+// NormalizeConfigPath performs lexical normalization and absolute resolution
+// for the config file itself. Relative config paths are intentionally allowed.
+func NormalizeConfigPath(rawPath, homeDir string) (string, error) {
+	cleaned, err := expandAndClean(rawPath, homeDir)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(cleaned) {
+		return cleaned, nil
 	}
 
-	return filepath.Clean(cleaned), nil
+	absolute, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path: %w", err)
+	}
+	return filepath.Clean(absolute), nil
 }
 
 // DeriveProfilePaths derives the two v0.1 runtime directories from an absolute root.
@@ -91,4 +99,16 @@ func expandHome(rawPath, homeDir string) (string, error) {
 
 	relative := strings.TrimPrefix(rawPath, "~"+string(filepath.Separator))
 	return filepath.Join(resolvedHome, relative), nil
+}
+
+func expandAndClean(rawPath, homeDir string) (string, error) {
+	if rawPath == "" {
+		return "", fmt.Errorf("path must not be empty")
+	}
+
+	expanded, err := expandHome(rawPath, homeDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(expanded), nil
 }

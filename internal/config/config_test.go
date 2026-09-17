@@ -2,7 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -59,6 +61,73 @@ func TestCustomRuntimeRootAndTildeExpansion(t *testing.T) {
 	}
 }
 
+func TestRelativeStablePathsAreRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "runtime root",
+			data: `{"runtime_root":"relative-runtime","profiles":{"ninibin":{}}}`,
+		},
+		{
+			name: "chatgpt app",
+			data: `{"chatgpt_app":"relative/ChatGPT.app","profiles":{"ninibin":{}}}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Decode([]byte(test.data), t.TempDir()); err == nil {
+				t.Fatal("Decode() unexpectedly accepted a relative stable path")
+			}
+		})
+	}
+}
+
+func TestResolvedIdentityDoesNotDependOnWorkingDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	firstWorkingDir := t.TempDir()
+	secondWorkingDir := t.TempDir()
+	originalWorkingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWorkingDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	raw := FileConfig{
+		RuntimeRoot: "~/runtime-root",
+		ChatGPTApp:  "~/Applications/ChatGPT.app",
+		Profiles: map[string]ProfileConfig{
+			"ninibin": {},
+		},
+	}
+
+	if err := os.Chdir(firstWorkingDir); err != nil {
+		t.Fatalf("os.Chdir(first) error = %v", err)
+	}
+	first, err := Resolve(raw, homeDir)
+	if err != nil {
+		t.Fatalf("Resolve(first) error = %v", err)
+	}
+
+	if err := os.Chdir(secondWorkingDir); err != nil {
+		t.Fatalf("os.Chdir(second) error = %v", err)
+	}
+	second, err := Resolve(raw, homeDir)
+	if err != nil {
+		t.Fatalf("Resolve(second) error = %v", err)
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("resolved identity changed with working directory: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestProfilePathsAreDerived(t *testing.T) {
 	homeDir := t.TempDir()
 	resolved, err := Decode([]byte(`{"runtime_root":"/tmp/runtime-root","profiles":{"ninibin":{}}}`), homeDir)
@@ -107,6 +176,37 @@ func TestInvalidProxies(t *testing.T) {
 	}
 }
 
+func TestProxyPortsAreValidated(t *testing.T) {
+	for _, proxy := range []string{
+		"http://host:0",
+		"http://host:65536",
+		"http://host:99999",
+		"http://host:abc",
+		"http://host:",
+	} {
+		t.Run(proxy, func(t *testing.T) {
+			data := []byte(`{"profiles":{"ninibin":{"proxy":` + mustMarshalString(proxy) + `}}}`)
+			if _, err := Decode(data, t.TempDir()); err == nil {
+				t.Fatalf("Decode() expected invalid port error for proxy %q", proxy)
+			}
+		})
+	}
+
+	for _, proxy := range []string{
+		"http://host:1",
+		"https://host:65535",
+		"socks5://host",
+		"socks5h://host",
+	} {
+		t.Run("valid-"+proxy, func(t *testing.T) {
+			data := []byte(`{"profiles":{"ninibin":{"proxy":` + mustMarshalString(proxy) + `}}}`)
+			if _, err := Decode(data, t.TempDir()); err != nil {
+				t.Fatalf("Decode() error = %v for proxy %q", err, proxy)
+			}
+		})
+	}
+}
+
 func TestAllowedProxySchemes(t *testing.T) {
 	for _, scheme := range []string{"socks5", "socks5h", "http", "https"} {
 		t.Run(scheme, func(t *testing.T) {
@@ -147,4 +247,12 @@ func TestProfilesFieldIsRequired(t *testing.T) {
 	if _, err := Decode([]byte(`{"runtime_root":"/tmp/runtime-root"}`), t.TempDir()); err == nil {
 		t.Fatal("Decode() expected missing profiles error")
 	}
+}
+
+func mustMarshalString(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
