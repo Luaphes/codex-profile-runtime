@@ -191,10 +191,16 @@ v0.1 不允许 profile 自定义 `codex_home` 或 `user_data_dir`。这样 profi
 
 - profile id 必须非空，并限制为可预测的安全字符集合。
 - profile id 在 map 中天然唯一。
-- 派生后的 profile 路径必须 canonicalize。
 - proxy 必须是支持的 URI 格式；非法 proxy 应在 launch 前失败。
 - 不允许任意环境变量注入。
 - 不提供 `provider`、`account`、`auth_token`、`session` 等字段。
+
+### Path normalization
+
+派生目录在第一次启动前可能还不存在，因此路径规范化分两个阶段：
+
+- 目录创建前，使用 `filepath.Clean` 加绝对路径解析做词法规范化；不能依赖要求路径已存在的 `filepath.EvalSymlinks()` 一类操作。
+- 目录创建后，再对已存在路径做 symlink resolution 和 identity validation。
 
 ## Runtime/process identification
 
@@ -211,7 +217,7 @@ ChatGPT.app executable path
 
 识别流程：
 
-1. 读取 profile 配置并得到 canonical `user_data_dir`。
+1. 读取 profile 配置并得到经过词法规范化的 `user_data_dir`；目录创建后再对已存在路径做 symlink resolution / identity validation。
 2. 枚举当前用户的进程。
 3. 找到可执行文件位于目标 `ChatGPT.app` 内、属于 ChatGPT 主进程且 argv 中精确包含 `--user-data-dir=<path>` 的进程。
 4. 记录 PID、PPID、进程启动时间、executable path 和原始 argv。
@@ -237,11 +243,13 @@ ChatGPT.app executable path
 停止前：
 
 1. 重新扫描目标 profile。
-2. 对每个候选 PID 重新验证：PID 仍存在、进程启动时间未变化、executable path 仍属于目标 ChatGPT.app、`user_data_dir` 仍精确匹配。
+2. 重新验证目标 ChatGPT 主进程：PID 仍存在、进程启动时间未变化、executable path 仍属于目标 ChatGPT.app、`user_data_dir` 仍精确匹配。
 3. 任何候选出现歧义或身份不匹配时，立即中止，不发送信号。
-4. 先发送 `SIGTERM`，等待退出并重新扫描。
-5. 只有显式使用 `--force` 时，才对仍然通过身份校验的目标进程发送 `SIGKILL`。
-6. 最终再次扫描，确认目标 profile 已不存在，同时确认其他 profile 的 PID 仍存活。
+4. 正常执行 `cpr stop <profile>` 时，只向通过重新校验的 ChatGPT 主进程发送 `SIGTERM`，不直接向 helper tree 中的进程逐个发送 `SIGTERM`，让 Electron 自己优雅关闭 renderer/helper 进程。
+5. helper tree 只用于发现、归属验证和优雅关闭后的残留检查。
+6. 等待优雅关闭结束后重新扫描。若仍有残留，普通 stop 报告未完全停止，不扩大信号目标。
+7. 只有显式执行 `cpr stop <profile> --force` 时，才允许对仍然残留的进程发送 `SIGKILL`；发送前必须再次确认每个进程属于目标 profile。
+8. 最终再次扫描，确认目标 profile 已不存在，同时确认其他 profile 的 PID 仍存活。
 
 由于 v0.1 的路径由 profile id 自动派生，不同 profile 不会共享同一个 `user_data_dir` 或 `codex_home`。如果未来支持路径覆盖，必须保留相同的唯一性校验。
 
@@ -278,8 +286,9 @@ ChatGPT.app executable path
 
 - `stop A` 只停止 A。
 - B 和用户手动启动的其他 ChatGPT 实例保持运行。
-- 普通停止使用 graceful termination。
-- 强制停止必须显式使用 `--force`。
+- 普通停止只向重新校验通过的 ChatGPT 主进程发送 `SIGTERM`，不逐个终止 helper tree。
+- helper tree 仅用于发现、归属验证和停止后的残留检查。
+- 强制停止必须显式使用 `--force`，且只允许终止发送信号前再次校验通过的残留进程。
 - 身份有歧义时宁可失败，也不发送信号。
 - 停止完成后重新扫描确认目标进程已消失。
 
