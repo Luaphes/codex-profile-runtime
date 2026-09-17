@@ -136,6 +136,11 @@ func listCurrentUserPIDs(uid uint32) ([]int, error) {
 	}
 
 	pidSize := int(unsafe.Sizeof(C.pid_t(0)))
+	var err error
+	pidCount, err = nextPIDCapacity(pidCount, pidCount)
+	if err != nil {
+		return nil, err
+	}
 	for {
 		pids := make([]C.pid_t, pidCount)
 		result := int(C.cpr_list_all_pids(&pids[0], C.int(len(pids)*pidSize)))
@@ -144,7 +149,10 @@ func listCurrentUserPIDs(uid uint32) ([]int, error) {
 			return nil, err
 		}
 		if retry {
-			pidCount = count
+			pidCount, err = nextPIDCapacity(len(pids), count)
+			if err != nil {
+				return nil, err
+			}
 			continue
 		}
 
@@ -166,10 +174,25 @@ func pidListResult(returnedCount, bufferPIDCapacity int) (int, bool, error) {
 	if returnedCount < 0 {
 		return 0, false, fmt.Errorf("enumerate processes")
 	}
-	if returnedCount > bufferPIDCapacity {
+	if returnedCount >= bufferPIDCapacity {
 		return returnedCount, true, nil
 	}
 	return returnedCount, false, nil
+}
+
+func nextPIDCapacity(current, reported int) (int, error) {
+	if current <= 0 {
+		return 0, fmt.Errorf("invalid process buffer capacity %d", current)
+	}
+	if current > int(^uint(0)>>1)/2 {
+		return 0, fmt.Errorf("process buffer capacity overflow")
+	}
+
+	next := current * 2
+	if reported > next {
+		next = reported
+	}
+	return next, nil
 }
 
 func processPath(pid int) (string, error) {
