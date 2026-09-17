@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +61,64 @@ func TestDeriveProfilePaths(t *testing.T) {
 	}
 	if got.UserDataDir != wantUserData {
 		t.Fatalf("UserDataDir = %q, want %q", got.UserDataDir, wantUserData)
+	}
+}
+
+func TestPrepareProfilePathsCreatesOnlyCurrentProfileDirectories(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "runtime-root")
+	expected, err := DeriveProfilePaths(root, "ninibin")
+	if err != nil {
+		t.Fatalf("DeriveProfilePaths() error = %v", err)
+	}
+
+	got, err := PrepareProfilePaths(root, "ninibin", expected)
+	if err != nil {
+		t.Fatalf("PrepareProfilePaths() error = %v", err)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	want, err := DeriveProfilePaths(realRoot, "ninibin")
+	if err != nil {
+		t.Fatalf("DeriveProfilePaths(real root) error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("PrepareProfilePaths() = %#v, want %#v", got, want)
+	}
+	for _, path := range []string{got.CodexHome, got.UserDataDir} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("os.Stat(%q) error = %v", path, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%q is not a directory", path)
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			t.Fatalf("%q permissions = %o, want no group/other permissions", path, info.Mode().Perm())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "profiles", "other")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected other profile directory: err = %v", err)
+	}
+}
+
+func TestPrepareProfilePathsRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	expected, err := DeriveProfilePaths(root, "ninibin")
+	if err != nil {
+		t.Fatalf("DeriveProfilePaths() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(expected.CodexHome), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, expected.CodexHome); err != nil {
+		t.Fatalf("os.Symlink() error = %v", err)
+	}
+
+	_, err = PrepareProfilePaths(root, "ninibin", expected)
+	if err == nil || !strings.Contains(err.Error(), "escapes runtime root") {
+		t.Fatalf("PrepareProfilePaths() error = %v, want symlink escape error", err)
 	}
 }

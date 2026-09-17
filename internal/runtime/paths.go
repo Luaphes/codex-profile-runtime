@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -76,6 +77,128 @@ func DeriveProfilePaths(runtimeRoot, profileID string) (ProfilePaths, error) {
 		CodexHome:   filepath.Clean(filepath.Join(base, "codex-home")),
 		UserDataDir: filepath.Clean(filepath.Join(base, "chatgpt-user-data")),
 	}, nil
+}
+
+// PrepareProfilePaths creates the current profile's runtime directories and
+// returns their canonical identities. It performs lexical path derivation
+// before creation, then resolves symlinks after creation and rejects paths
+// that escape the runtime root.
+func PrepareProfilePaths(runtimeRoot, profileID string, expected ProfilePaths) (ProfilePaths, error) {
+	derived, err := DeriveProfilePaths(runtimeRoot, profileID)
+	if err != nil {
+		return ProfilePaths{}, err
+	}
+	if expected != derived {
+		return ProfilePaths{}, fmt.Errorf("profile paths do not match derived paths")
+	}
+
+	if err := os.MkdirAll(runtimeRoot, 0o700); err != nil {
+		return ProfilePaths{}, fmt.Errorf("create runtime root: %w", err)
+	}
+	realRuntimeRoot, err := filepath.EvalSymlinks(runtimeRoot)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve runtime root: %w", err)
+	}
+	realRuntimeRoot, err = filepath.Abs(realRuntimeRoot)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve runtime root absolute path: %w", err)
+	}
+
+	profilesRoot := filepath.Join(realRuntimeRoot, "profiles")
+	profileRoot := filepath.Join(profilesRoot, profileID)
+	codexHome := filepath.Join(profileRoot, "codex-home")
+	userDataDir := filepath.Join(profileRoot, "chatgpt-user-data")
+
+	for _, path := range []string{profilesRoot, profileRoot, codexHome, userDataDir} {
+		if err := ensureDirectoryWithin(path, realRuntimeRoot); err != nil {
+			return ProfilePaths{}, err
+		}
+	}
+
+	realProfileRoot, err := filepath.EvalSymlinks(profileRoot)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve profile runtime root: %w", err)
+	}
+	realProfileRoot, err = filepath.Abs(realProfileRoot)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve profile runtime root absolute path: %w", err)
+	}
+	if !isWithin(realRuntimeRoot, realProfileRoot) {
+		return ProfilePaths{}, fmt.Errorf("profile runtime root escapes runtime root: %q", profileID)
+	}
+
+	realCodexHome, err := filepath.EvalSymlinks(codexHome)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve codex home: %w", err)
+	}
+	realCodexHome, err = filepath.Abs(realCodexHome)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve codex home absolute path: %w", err)
+	}
+	if !isWithin(realRuntimeRoot, realCodexHome) || !isWithin(realProfileRoot, realCodexHome) {
+		return ProfilePaths{}, fmt.Errorf("codex home escapes profile runtime root: %q", realCodexHome)
+	}
+
+	realUserDataDir, err := filepath.EvalSymlinks(userDataDir)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve user data directory: %w", err)
+	}
+	realUserDataDir, err = filepath.Abs(realUserDataDir)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve user data directory absolute path: %w", err)
+	}
+	if !isWithin(realRuntimeRoot, realUserDataDir) || !isWithin(realProfileRoot, realUserDataDir) {
+		return ProfilePaths{}, fmt.Errorf("user data directory escapes profile runtime root: %q", realUserDataDir)
+	}
+
+	return ProfilePaths{
+		CodexHome:   realCodexHome,
+		UserDataDir: realUserDataDir,
+	}, nil
+}
+
+func ensureDirectoryWithin(path, runtimeRoot string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect runtime directory %q: %w", path, err)
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return fmt.Errorf("create runtime directory %q: %w", path, err)
+		}
+		return nil
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		realPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve runtime directory symlink %q: %w", path, err)
+		}
+		realPath, err = filepath.Abs(realPath)
+		if err != nil {
+			return fmt.Errorf("resolve runtime directory symlink absolute path %q: %w", path, err)
+		}
+		if !isWithin(runtimeRoot, realPath) {
+			return fmt.Errorf("runtime directory symlink escapes runtime root: %q -> %q", path, realPath)
+		}
+		info, err = os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("inspect runtime directory symlink target %q: %w", path, err)
+		}
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("runtime path is not a directory: %q", path)
+	}
+	return nil
+}
+
+func isWithin(root, path string) bool {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func expandHome(rawPath, homeDir string) (string, error) {
