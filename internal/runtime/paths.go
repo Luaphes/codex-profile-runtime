@@ -164,6 +164,55 @@ func PrepareProfilePaths(runtimeRoot, profileID string, expected ProfilePaths) (
 	}, nil
 }
 
+// ResolveProfilePaths performs the post-creation identity check without
+// creating, chmod'ing, or otherwise mutating runtime directories.
+func ResolveProfilePaths(runtimeRoot, profileID string, expected ProfilePaths) (ProfilePaths, error) {
+	derived, err := DeriveProfilePaths(runtimeRoot, profileID)
+	if err != nil {
+		return ProfilePaths{}, err
+	}
+
+	rootInfo, err := os.Lstat(runtimeRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if expected != derived {
+				return ProfilePaths{}, fmt.Errorf("profile paths do not match derived paths")
+			}
+			return derived, nil
+		}
+		return ProfilePaths{}, fmt.Errorf("inspect runtime root: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink == 0 && !rootInfo.IsDir() {
+		return ProfilePaths{}, fmt.Errorf("runtime root is not a directory: %q", runtimeRoot)
+	}
+
+	realRuntimeRoot, err := filepath.EvalSymlinks(runtimeRoot)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve runtime root: %w", err)
+	}
+	realRuntimeRoot, err = filepath.Abs(realRuntimeRoot)
+	if err != nil {
+		return ProfilePaths{}, fmt.Errorf("resolve runtime root absolute path: %w", err)
+	}
+	canonicalDerived, err := DeriveProfilePaths(realRuntimeRoot, profileID)
+	if err != nil {
+		return ProfilePaths{}, err
+	}
+	if !matchesDerivedPath(expected.CodexHome, derived.CodexHome, canonicalDerived.CodexHome) ||
+		!matchesDerivedPath(expected.UserDataDir, derived.UserDataDir, canonicalDerived.UserDataDir) {
+		return ProfilePaths{}, fmt.Errorf("profile paths do not match derived paths")
+	}
+
+	profilesRoot := filepath.Join(realRuntimeRoot, "profiles")
+	profileRoot := filepath.Join(profilesRoot, profileID)
+	for _, path := range []string{profilesRoot, profileRoot, canonicalDerived.CodexHome, canonicalDerived.UserDataDir} {
+		if err := validateExistingDirectory(path, realRuntimeRoot); err != nil {
+			return ProfilePaths{}, err
+		}
+	}
+	return canonicalDerived, nil
+}
+
 func ensureDirectoryWithin(path, runtimeRoot string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -195,6 +244,34 @@ func ensureDirectoryWithin(path, runtimeRoot string) error {
 		return fmt.Errorf("runtime path is not a directory: %q", path)
 	}
 	return secureDirectory(path, "runtime directory")
+}
+
+func validateExistingDirectory(path, runtimeRoot string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect runtime directory %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		realPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve runtime directory symlink %q: %w", path, err)
+		}
+		realPath, err = filepath.Abs(realPath)
+		if err != nil {
+			return fmt.Errorf("resolve runtime directory symlink absolute path %q: %w", path, err)
+		}
+		if !isWithin(runtimeRoot, realPath) {
+			return fmt.Errorf("runtime directory symlink escapes runtime root: %q -> %q", path, realPath)
+		}
+		return fmt.Errorf("manager-owned runtime path must not be a symlink: %q -> %q", path, realPath)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("runtime path is not a directory: %q", path)
+	}
+	return nil
 }
 
 func matchesDerivedPath(actual, lexical, canonical string) bool {

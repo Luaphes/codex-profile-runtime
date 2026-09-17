@@ -64,3 +64,19 @@ func TestParseLaunchArgsRejectsMissingProfile(t *testing.T) {
 		t.Fatal("parseLaunchArgs() unexpectedly accepted missing profile")
 	}
 }
+
+func TestParseListArgsSupportsJSONAndConfig(t *testing.T) {
+	jsonOutput, configPath, err := parseListArgs([]string{"--json", "--config", "./test-config.json"})
+	if err != nil {
+		t.Fatalf("parseListArgs() error = %v", err)
+	}
+	if !jsonOutput || configPath != "./test-config.json" {
+		t.Fatalf("parseListArgs() = (%t, %q), want (true, ./test-config.json)", jsonOutput, configPath)
+	}
+}
+
+func TestParseListArgsRejectsUnexpectedArguments(t *testing.T) {
+	if _, _, err := parseListArgs([]string{"profile"}); err == nil {
+		t.Fatal("parseListArgs() unexpectedly accepted positional argument")
+	}
+}

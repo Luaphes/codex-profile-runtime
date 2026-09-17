@@ -221,3 +221,48 @@ func TestPrepareProfilePathsTightensExistingDirectoryPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveProfilePathsDoesNotCreateMissingRuntimeDirectories(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-runtime-root")
+	expected, err := DeriveProfilePaths(root, "ninibin")
+	if err != nil {
+		t.Fatalf("DeriveProfilePaths() error = %v", err)
+	}
+
+	got, err := ResolveProfilePaths(root, "ninibin", expected)
+	if err != nil {
+		t.Fatalf("ResolveProfilePaths() error = %v", err)
+	}
+	if got != expected {
+		t.Fatalf("ResolveProfilePaths() = %#v, want %#v", got, expected)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("ResolveProfilePaths() created runtime root: err = %v", err)
+	}
+}
+
+func TestResolveProfilePathsRejectsInternalSymlinkAlias(t *testing.T) {
+	root := t.TempDir()
+	expected, err := DeriveProfilePaths(root, "ninibin")
+	if err != nil {
+		t.Fatalf("DeriveProfilePaths() error = %v", err)
+	}
+	other, err := DeriveProfilePaths(root, "lucas")
+	if err != nil {
+		t.Fatalf("DeriveProfilePaths() error = %v", err)
+	}
+	if err := os.MkdirAll(other.CodexHome, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(expected.CodexHome), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.Symlink(other.CodexHome, expected.CodexHome); err != nil {
+		t.Fatalf("os.Symlink() error = %v", err)
+	}
+
+	_, err = ResolveProfilePaths(root, "ninibin", expected)
+	if err == nil || !strings.Contains(err.Error(), "must not be a symlink") {
+		t.Fatalf("ResolveProfilePaths() error = %v, want internal alias rejection", err)
+	}
+}

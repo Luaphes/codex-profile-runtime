@@ -25,6 +25,18 @@ static int cpr_pid_path(pid_t pid, char *buffer, unsigned int buffer_size) {
 	return proc_pidpath(pid, buffer, buffer_size);
 }
 
+static int cpr_pid_metadata(pid_t pid, uint32_t *ppid, uint64_t *start_sec, uint64_t *start_usec) {
+	struct proc_bsdinfo info;
+	int result = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+	if (result != (int)sizeof(info)) {
+		return -1;
+	}
+	*ppid = info.pbi_ppid;
+	*start_sec = info.pbi_start_tvsec;
+	*start_usec = info.pbi_start_tvusec;
+	return 0;
+}
+
 static int cpr_pid_args_size(pid_t pid) {
 	int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
 	size_t size = 0;
@@ -51,6 +63,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -63,32 +76,57 @@ func NewScanner() Scanner {
 	return darwinScanner{uid: uint32(os.Getuid())}
 }
 
+// NewSnapshotter returns the read-only Darwin process snapshotter.
+func NewSnapshotter() Snapshotter {
+	return darwinScanner{uid: uint32(os.Getuid())}
+}
+
 func (s darwinScanner) FindMain(executablePath, userDataDir string) (Info, bool, error) {
-	pids, err := listCurrentUserPIDs(s.uid)
+	processes, err := s.Snapshot(executablePath)
 	if err != nil {
 		return Info{}, false, err
 	}
 
-	for _, pid := range pids {
-		executable, err := processPath(pid)
-		if err != nil {
-			continue
-		}
-		if filepath.Clean(executable) != filepath.Clean(executablePath) {
-			continue
-		}
-
-		args, err := processArgs(pid)
-		if err != nil {
-			continue
-		}
-		info := Info{PID: pid, ExecutablePath: executable, Args: args}
+	for _, info := range processes {
 		if MatchesMainProcess(info, executablePath, userDataDir) {
 			return info, true, nil
 		}
 	}
 
 	return Info{}, false, nil
+}
+
+func (s darwinScanner) Snapshot(executablePath string) ([]Info, error) {
+	pids, err := listCurrentUserPIDs(s.uid)
+	if err != nil {
+		return nil, err
+	}
+
+	expectedExecutable := filepath.Clean(executablePath)
+	processes := make([]Info, 0)
+	for _, pid := range pids {
+		executable, err := processPath(pid)
+		if err != nil || filepath.Clean(executable) != expectedExecutable {
+			continue
+		}
+
+		ppid, startTime, err := processMetadata(pid)
+		if err != nil {
+			continue
+		}
+		args, err := processArgs(pid)
+		if err != nil {
+			continue
+		}
+		processes = append(processes, Info{
+			PID:            pid,
+			PPID:           ppid,
+			StartTime:      startTime,
+			ExecutablePath: executable,
+			Args:           args,
+		})
+	}
+	return processes, nil
 }
 
 func listCurrentUserPIDs(uid uint32) ([]int, error) {
@@ -141,6 +179,20 @@ func processPath(pid int) (string, error) {
 		return "", fmt.Errorf("resolve executable path for pid %d", pid)
 	}
 	return strings.TrimRight(string(buffer[:result]), "\x00"), nil
+}
+
+func processMetadata(pid int) (int, time.Time, error) {
+	var ppid C.uint32_t
+	var startSeconds C.uint64_t
+	var startMicroseconds C.uint64_t
+	if result := C.cpr_pid_metadata(C.pid_t(pid), &ppid, &startSeconds, &startMicroseconds); result != 0 {
+		return 0, time.Time{}, fmt.Errorf("resolve metadata for pid %d", pid)
+	}
+	return int(ppid), processStartTime(uint64(startSeconds), uint64(startMicroseconds)), nil
+}
+
+func processStartTime(seconds, microseconds uint64) time.Time {
+	return time.Unix(int64(seconds), int64(microseconds)*1000).Local()
 }
 
 func processArgs(pid int) ([]string, error) {
