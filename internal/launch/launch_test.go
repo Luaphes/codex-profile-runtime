@@ -123,6 +123,80 @@ func TestMergeEnvironmentOverridesInheritedValues(t *testing.T) {
 	}
 }
 
+func TestMergeEnvironmentScrubsInheritedProxyVariables(t *testing.T) {
+	base := []string{
+		"PATH=/bin",
+		"HTTP_PROXY=http://inherited",
+		"HTTPS_PROXY=https://inherited",
+		"ALL_PROXY=socks5://inherited",
+		"http_proxy=http://inherited",
+		"https_proxy=https://inherited",
+		"all_proxy=socks5://inherited",
+		"NO_PROXY=localhost",
+		"no_proxy=localhost",
+	}
+
+	got := envMap(mergeEnvironment(base, []string{"CODEX_HOME=/runtime"}))
+	for _, key := range []string{
+		"HTTP_PROXY",
+		"HTTPS_PROXY",
+		"ALL_PROXY",
+		"http_proxy",
+		"https_proxy",
+		"all_proxy",
+		"NO_PROXY",
+		"no_proxy",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("environment unexpectedly retained %s: %#v", key, got)
+		}
+	}
+}
+
+func TestMergeEnvironmentDerivesProxyOnlyFromProfileValue(t *testing.T) {
+	profileProxy := "socks5://profile"
+	got := envMap(mergeEnvironment(
+		[]string{
+			"HTTP_PROXY=http://inherited",
+			"HTTPS_PROXY=https://inherited",
+			"ALL_PROXY=socks5://inherited",
+			"http_proxy=http://conflicting",
+			"https_proxy=https://conflicting",
+			"all_proxy=socks5://conflicting",
+			"NO_PROXY=localhost",
+			"no_proxy=localhost",
+		},
+		[]string{
+			"HTTP_PROXY=" + profileProxy,
+			"HTTPS_PROXY=" + profileProxy,
+			"ALL_PROXY=" + profileProxy,
+		},
+	))
+
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
+		if got[key] != profileProxy {
+			t.Fatalf("%s = %q, want %q", key, got[key], profileProxy)
+		}
+	}
+	for _, key := range []string{"http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("environment unexpectedly retained %s: %#v", key, got)
+		}
+	}
+}
+
+func TestMergeEnvironmentDoesNotModifyProcessEnvironment(t *testing.T) {
+	before := envMap(os.Environ())
+	_ = mergeEnvironment(os.Environ(), []string{
+		"CODEX_HOME=/runtime",
+		"HTTP_PROXY=socks5://profile",
+	})
+	after := envMap(os.Environ())
+	if !equalEnvMaps(before, after) {
+		t.Fatalf("mergeEnvironment() modified process environment")
+	}
+}
+
 func TestServiceRejectsMissingApp(t *testing.T) {
 	root := t.TempDir()
 	profile := resolvedProfile(t, root, "ninibin")
@@ -315,6 +389,18 @@ func countEnvKey(values []string, key string) int {
 		}
 	}
 	return count
+}
+
+func equalEnvMaps(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func equalStrings(left, right []string) bool {
