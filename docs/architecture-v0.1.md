@@ -135,8 +135,8 @@ profile 主要表达意图。最小配置可以只有 profile id 和可选代理
 ```json
 {
   "profiles": {
-    "ninibin": {
-      "proxy": "socks5://127.0.0.1:18081"
+    "personal": {
+      "proxy": "socks5://127.0.0.1:1080"
     }
   }
 }
@@ -151,10 +151,10 @@ profile 主要表达意图。最小配置可以只有 profile id 和可选代理
   "runtime_root": "~/Library/Application Support/CodexProfileRuntime",
   "chatgpt_app": "/Applications/ChatGPT.app",
   "profiles": {
-    "ninibin": {
-      "proxy": "socks5://127.0.0.1:18081"
+    "personal": {
+      "proxy": "socks5://127.0.0.1:1080"
     },
-    "personal": {}
+    "work": {}
   }
 }
 ```
