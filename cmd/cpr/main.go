@@ -10,6 +10,7 @@ import (
 
 	"github.com/Luaphes/codex-profile-runtime/internal/config"
 	"github.com/Luaphes/codex-profile-runtime/internal/launch"
+	profilelist "github.com/Luaphes/codex-profile-runtime/internal/list"
 	"github.com/Luaphes/codex-profile-runtime/internal/process"
 	"github.com/Luaphes/codex-profile-runtime/internal/runtime"
 )
@@ -29,6 +30,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidate(args[1:], stdout, stderr)
 	case "launch":
 		return runLaunch(args[1:], stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		return 2
@@ -146,7 +149,78 @@ func parseLaunchArgs(args []string) (string, string, error) {
 	return profileID, configPath, nil
 }
 
+func runList(args []string, stdout, stderr io.Writer) int {
+	jsonOutput, configPath, err := parseListArgs(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "cpr list: %v\n", err)
+		return 2
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "cpr list: resolve home directory: %v\n", err)
+		return 1
+	}
+
+	if configPath == "" {
+		configPath = runtime.DefaultConfigPath(homeDir)
+	}
+	resolved, err := config.Load(configPath, homeDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "cpr list: %v\n", err)
+		return 1
+	}
+
+	instances, err := profilelist.List(resolved, process.NewSnapshotter())
+	if err != nil {
+		fmt.Fprintf(stderr, "cpr list: %v\n", err)
+		return 1
+	}
+	if jsonOutput {
+		if err := profilelist.WriteJSON(stdout, instances); err != nil {
+			fmt.Fprintf(stderr, "cpr list: write JSON: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if err := profilelist.WriteHuman(stdout, instances); err != nil {
+		fmt.Fprintf(stderr, "cpr list: write output: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func parseListArgs(args []string) (bool, string, error) {
+	var jsonOutput bool
+	var configPath string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--config":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return false, "", fmt.Errorf("--config requires a path")
+			}
+			i++
+			configPath = args[i]
+		case strings.HasPrefix(arg, "--config="):
+			configPath = strings.TrimPrefix(arg, "--config=")
+			if configPath == "" {
+				return false, "", fmt.Errorf("--config requires a path")
+			}
+		case strings.HasPrefix(arg, "-"):
+			return false, "", fmt.Errorf("unknown option %q", arg)
+		default:
+			return false, "", fmt.Errorf("unexpected positional argument %q", arg)
+		}
+	}
+	return jsonOutput, configPath, nil
+}
+
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "usage: cpr validate [--config <path>]")
 	fmt.Fprintln(stderr, "       cpr launch <profile> [--config <path>]")
+	fmt.Fprintln(stderr, "       cpr list [--json] [--config <path>]")
 }
