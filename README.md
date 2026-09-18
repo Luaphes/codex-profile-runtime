@@ -32,6 +32,10 @@ go build -o ./bin/cpr ./cmd/cpr
 
 The resulting binary is `./bin/cpr`.
 
+## Installation and releases
+
+For now, build from source with the command above. After the release workflow is merged and a `v*` tag is created, GitHub Releases will provide macOS binaries for the supported architectures. This PR does not publish a release or add an installer.
+
 ## Configuration
 
 The default configuration path is:
@@ -56,7 +60,7 @@ An optional proxy is configured on the profile itself:
 {
   "profiles": {
     "personal": {
-      "proxy": "socks5://127.0.0.1:18081"
+      "proxy": "socks5://127.0.0.1:1080"
     },
     "work": {}
   }

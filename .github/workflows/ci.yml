@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify macOS runtime
+    runs-on: macos-14
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Darwin cgo toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = "darwin"
+          test "$(go env CGO_ENABLED)" = "1"
+
+      - name: Check formatting
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build cpr
+        run: go build -o "$RUNNER_TEMP/cpr" ./cmd/cpr
+
+      - name: Run no-side-effect CLI sanity check
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/cpr" validate --help
