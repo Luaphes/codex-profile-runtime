@@ -136,6 +136,20 @@ func TestStopRejectsSubstringUserDataMatch(t *testing.T) {
 	}
 }
 
+func TestStopFailsIfTargetReappearsOnFinalRescan(t *testing.T) {
+	fixture := newStopFixture(t, "ninibin")
+	target := fixture.mainInfo(101, time.Unix(100, 0), "ninibin")
+	inspector := &fakeInspector{snapshots: [][]process.Info{{target}, {}, {target}}}
+	signaler := &fakeSignaler{}
+	err := newTestService(inspector, signaler).Stop(fixture.resolved, fixture.resolved.Profiles["ninibin"], false)
+	if !errors.Is(err, ErrIdentity) {
+		t.Fatalf("Stop() error = %v, want final-rescan identity error", err)
+	}
+	if want := []signalCall{{pid: 101, signal: SignalTERM}}; !equalSignalCalls(signaler.calls, want) {
+		t.Fatalf("signals = %#v, want %#v", signaler.calls, want)
+	}
+}
+
 func TestStopFailsClosedOnAmbiguousMainIdentity(t *testing.T) {
 	fixture := newStopFixture(t, "ninibin")
 	first := fixture.mainInfo(101, time.Unix(100, 0), "ninibin")
@@ -297,6 +311,20 @@ func TestHelperWithOnlySharedExecutableIsNeverKilled(t *testing.T) {
 	err := newTestService(inspector, signaler).Stop(fixture.resolved, fixture.resolved.Profiles["ninibin"], false)
 	if err != nil {
 		t.Fatalf("Stop() error = %v, want success for unowned helper", err)
+	}
+	if want := []signalCall{{pid: 101, signal: SignalTERM}}; !equalSignalCalls(signaler.calls, want) {
+		t.Fatalf("signals = %#v, want %#v", signaler.calls, want)
+	}
+}
+
+func TestForceNeverKillsHelperWithConflictingUserDataDir(t *testing.T) {
+	fixture := newStopFixture(t, "ninibin")
+	target := fixture.mainInfo(101, time.Unix(100, 0), "ninibin")
+	helper := fixture.helperInfo(303, 101, time.Unix(110, 0), "--user-data-dir=/tmp/other-profile")
+	inspector := &fakeInspector{snapshots: [][]process.Info{{target, helper}, {helper}}}
+	signaler := &fakeSignaler{}
+	if err := newTestService(inspector, signaler).Stop(fixture.resolved, fixture.resolved.Profiles["ninibin"], true); err != nil {
+		t.Fatalf("Stop() error = %v, want success without killing ambiguous helper", err)
 	}
 	if want := []signalCall{{pid: 101, signal: SignalTERM}}; !equalSignalCalls(signaler.calls, want) {
 		t.Fatalf("signals = %#v, want %#v", signaler.calls, want)

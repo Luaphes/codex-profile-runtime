@@ -2,6 +2,7 @@ package process
 
 import (
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -43,13 +44,27 @@ type Inspector interface {
 
 // HasExactUserDataDir reports whether argv contains the exact profile identity argument.
 func HasExactUserDataDir(info Info, userDataDir string) bool {
-	expectedArg := "--user-data-dir=" + filepath.Clean(userDataDir)
-	for _, arg := range info.Args {
-		if arg == expectedArg {
+	expected := filepath.Clean(userDataDir)
+	for _, candidate := range UserDataDirs(info) {
+		if candidate == expected {
 			return true
 		}
 	}
 	return false
+}
+
+// UserDataDirs returns every explicit --user-data-dir value in argv using the
+// same lexical normalization as the runtime identity checks.
+func UserDataDirs(info Info) []string {
+	const prefix = "--user-data-dir="
+
+	dirs := make([]string, 0, 1)
+	for _, arg := range info.Args {
+		if strings.HasPrefix(arg, prefix) {
+			dirs = append(dirs, filepath.Clean(strings.TrimPrefix(arg, prefix)))
+		}
+	}
+	return dirs
 }
 
 // MatchesMainProcess applies the exact identity rule shared by scanners and tests.
@@ -57,7 +72,19 @@ func MatchesMainProcess(info Info, executablePath, userDataDir string) bool {
 	if filepath.Clean(info.ExecutablePath) != filepath.Clean(executablePath) {
 		return false
 	}
-	return HasExactUserDataDir(info, userDataDir)
+	if !HasExactUserDataDir(info, userDataDir) {
+		return false
+	}
+
+	// Multiple conflicting identity arguments are ambiguous and must not be
+	// treated as a match for either profile.
+	expected := filepath.Clean(userDataDir)
+	for _, candidate := range UserDataDirs(info) {
+		if candidate != expected {
+			return false
+		}
+	}
+	return true
 }
 
 // SameIdentity compares the PID and stable process identity fields needed to

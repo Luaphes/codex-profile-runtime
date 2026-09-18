@@ -153,7 +153,7 @@ func (s Service) Stop(resolved config.ResolvedConfig, profile config.ResolvedPro
 		}
 	}
 
-	if err := verifyOtherProfiles(snapshot, otherIdentities); err != nil {
+	if err := s.verifyFinalState(profile.ID, executablePath, targetIdentity, otherIdentities, targetPaths.UserDataDir, bundleRoot, evidence); err != nil {
 		return err
 	}
 	return nil
@@ -336,6 +336,9 @@ func captureOwnershipEvidence(snapshot []process.Info, target profileIdentity, o
 		if candidate.PID == target.Info.PID || !pathWithin(bundleRoot, candidate.ExecutablePath) {
 			continue
 		}
+		if hasConflictingUserDataDir(candidate, targetUserData) {
+			continue
+		}
 		if isForeignOwned(candidate, snapshot, other) {
 			continue
 		}
@@ -370,6 +373,9 @@ func isTargetOwned(candidate process.Info, snapshot []process.Info, target profi
 	if candidate.PID <= 0 || candidate.PID == target.Info.PID || !pathWithin(bundleRoot, candidate.ExecutablePath) {
 		return false
 	}
+	if hasConflictingUserDataDir(candidate, targetUserData) {
+		return false
+	}
 	if isForeignOwned(candidate, snapshot, other) {
 		return false
 	}
@@ -380,6 +386,16 @@ func isTargetOwned(candidate process.Info, snapshot []process.Info, target profi
 		return true
 	}
 	return hasAncestryTo(candidate, target.Info, snapshot)
+}
+
+func hasConflictingUserDataDir(info process.Info, targetUserData string) bool {
+	expected := filepath.Clean(targetUserData)
+	for _, candidate := range process.UserDataDirs(info) {
+		if candidate != expected {
+			return true
+		}
+	}
+	return false
 }
 
 func isForeignOwned(candidate process.Info, snapshot []process.Info, other map[string]profileIdentity) bool {
@@ -429,6 +445,30 @@ func verifyOtherProfiles(snapshot []process.Info, other map[string]profileIdenti
 		if len(matches) != 1 || !process.SameIdentity(identity.Info, matches[0]) {
 			return fmt.Errorf("other profile %q was affected or became ambiguous", id)
 		}
+	}
+	return nil
+}
+
+func (s Service) verifyFinalState(profileID, executablePath string, target profileIdentity, other map[string]profileIdentity, targetUserData, bundleRoot string, evidence ownershipEvidence) error {
+	snapshot, err := s.Inspector.SnapshotAll()
+	if err != nil {
+		return fmt.Errorf(`profile %q: final process scan: %w`, profileID, err)
+	}
+
+	matches := matchingMainProcesses(snapshot, executablePath, targetUserData)
+	if len(matches) > 1 {
+		return fmt.Errorf(`profile %q reappeared with multiple ChatGPT main processes: %w`, profileID, ErrAmbiguous)
+	}
+	if len(matches) == 1 {
+		return fmt.Errorf(`profile %q reappeared before stop completed: %w`, profileID, ErrIdentity)
+	}
+
+	residuals := classifyResiduals(snapshot, target, other, targetUserData, bundleRoot, evidence)
+	if residuals.any() {
+		return fmt.Errorf(`profile %q still has target-owned residual processes: %w`, profileID, ErrResidual)
+	}
+	if err := verifyOtherProfiles(snapshot, other); err != nil {
+		return err
 	}
 	return nil
 }

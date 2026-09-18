@@ -23,6 +23,22 @@ func TestMatchesMainProcessRequiresExactUserDataArgument(t *testing.T) {
 	}
 }
 
+func TestMatchesMainProcessRejectsConflictingUserDataArguments(t *testing.T) {
+	info := Info{
+		PID:            123,
+		ExecutablePath: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+		Args: []string{
+			"ChatGPT",
+			"--user-data-dir=/tmp/profile",
+			"--user-data-dir=/tmp/other-profile",
+		},
+	}
+
+	if MatchesMainProcess(info, info.ExecutablePath, "/tmp/profile") {
+		t.Fatal("MatchesMainProcess() accepted conflicting user-data-dir arguments")
+	}
+}
+
 func TestMatchesMainProcessRequiresExpectedExecutable(t *testing.T) {
 	info := Info{
 		ExecutablePath: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
