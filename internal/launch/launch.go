@@ -50,8 +50,27 @@ func (execRunner) Run(spec CommandSpec) error {
 	return command.Run()
 }
 
+var scrubbedProxyEnvironmentKeys = map[string]struct{}{
+	"HTTP_PROXY":  {},
+	"HTTPS_PROXY": {},
+	"ALL_PROXY":   {},
+	"http_proxy":  {},
+	"https_proxy": {},
+	"all_proxy":   {},
+	"NO_PROXY":    {},
+	"no_proxy":    {},
+}
+
 func mergeEnvironment(base, overrides []string) []string {
-	merged := append([]string(nil), base...)
+	merged := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, scrub := scrubbedProxyEnvironmentKeys[key]; scrub {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+
 	for _, override := range overrides {
 		key, _, ok := strings.Cut(override, "=")
 		if !ok || key == "" {

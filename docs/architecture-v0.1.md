@@ -71,9 +71,11 @@ v0.1 只保留已经人工验证过的一个启动路径：使用 `open -n ... -
 - `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY` 使用同一个 `proxy` 值派生。
 - `CODEX_HOME` 使用 profile id 和 runtime root 派生的目录。
 
+启动环境不会直接透传 shell 的代理语义：manager 会移除继承的大小写 proxy 变量以及 `NO_PROXY`/`no_proxy`。有 proxy 时只重新注入由 profile `proxy` 派生的三个大写变量；无 proxy 时不注入任何这些变量。
+
 启动后必须严格验证：目标进程的 executable path 属于预期的 `ChatGPT.app`，且 argv 中包含精确匹配的 `--user-data-dir`。不能因为 `open` 返回成功，就直接把 profile 标记为 running。
 
-v0.1 不要求把“目标进程继承了 `CODEX_HOME`”作为启动成功的硬条件。`CODEX_HOME` 的隔离通过真实 ChatGPT/Codex 集成测试验证；进程识别仍以 executable path 和 exact `--user-data-dir` 为准。
+v0.1 不要求把“目标进程继承了 `CODEX_HOME`”作为启动成功的硬条件。`CODEX_HOME` 的实际 auth/state 隔离需要通过可选的真实 Auth / `CODEX_HOME` integration check 验证；进程识别仍以 executable path 和 exact `--user-data-dir` 为准。
 
 环境变量只注入目标启动上下文，不修改当前 shell 或系统级全局环境。v0.1 不提供 direct-exec fallback；只有后续证据表明单一启动路径不足时，才重新评估。
 
@@ -107,26 +109,22 @@ codex-profile-runtime/
 │       └── main.go
 │
 ├── internal/
-│   ├── cli/
 │   ├── config/
 │   ├── launch/
+│   ├── list/
 │   ├── process/
-│   │   └── darwin/
-│   └── runtime/
+│   ├── runtime/
+│   └── stop/
 │
 ├── examples/
 │   └── config.json
 │
 ├── docs/
-│   └── architecture-v0.1.md
-│
-└── tests/
-    ├── config/
-    ├── process-snapshots/
-    └── integration/
+    ├── architecture-v0.1.md
+    └── integration-smoke.md
 ```
 
-核心实现保持在 CLI、配置、启动、进程识别和运行时路径五个边界内，不引入 GUI、daemon、audit 或 provider abstraction。
+核心实现保持在 CLI、配置、启动、列表、进程识别、运行时路径和停止策略边界内，不引入 GUI、daemon、audit 或 provider abstraction。
 
 ## Profile config schema
 
@@ -182,6 +180,7 @@ v0.1 不允许 profile 自定义 `codex_home` 或 `user_data_dir`。这样 profi
 - 有值时，使用该值派生 `--proxy-server`。
 - 同时使用该值派生 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`。
 - 缺省时，不设置这些代理参数和环境变量。
+- 无论是否配置 proxy，都不继承 shell 中的大小写 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 和 `no_proxy`；有 proxy 时只注入由 profile 值派生的三个大写变量。
 - v0.1 不接受独立的 `chromium_server`、`HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 配置。
 - v0.1 不支持把代理用户名密码写入配置。
 
@@ -221,13 +220,13 @@ ChatGPT.app executable path
 2. 枚举当前用户的进程。
 3. 找到可执行文件位于目标 `ChatGPT.app` 内、属于 ChatGPT 主进程且 argv 中精确包含 `--user-data-dir=<path>` 的进程。
 4. 记录 PID、PPID、进程启动时间、executable path 和原始 argv。
-5. 用 PPID 关系递归收集 helper tree。
-6. 对 helper 只接受可执行文件位于同一个 ChatGPT.app bundle，或 argv 中同样带有该 profile 精确 `user_data_dir` 的进程。
-7. `list` 每次重新扫描进程，不依赖 PID 文件或持久化运行状态。
+5. `list` 只报告配置 profile 的精确 ChatGPT 主进程；它不对完整 helper tree 建模，也不把共享 bundle executable 单独当作 profile 身份证据。
+6. `stop` 使用全量进程快照、PPID ancestry、同 bundle 路径和 argv 中的 profile `user_data_dir` 证据做残留归属判断。helper 只有在保守的目标归属证据成立时才会进入 force 残留处理；显式带有其他或互相冲突 `--user-data-dir` 的候选不会被 ancestry 覆盖，也绝不作为目标进程发送 `SIGKILL`。
+7. `list` 和 `stop` 每次重新扫描进程，不依赖 PID 文件或持久化运行状态。
 
 如果使用 `open -n`，Manager 不应依赖 `open` 的 PID，因为它很快退出。应在启动后轮询进程表，直到找到带有精确 `user_data_dir` 的 ChatGPT 主进程；超时则启动失败。
 
-启动验证严格要求 executable path 和 exact `--user-data-dir`；不把运行时 `CODEX_HOME` 环境继承证明作为 launch 成功条件。`CODEX_HOME` 隔离由 integration tests 覆盖。
+启动验证严格要求 executable path 和 exact `--user-data-dir`；不把运行时 `CODEX_HOME` 环境继承证明作为 launch 成功条件。需要真实 auth/state 证据时，使用 integration smoke 文档中的可选人工检查。
 
 ## Safe stop strategy
 
@@ -249,7 +248,9 @@ ChatGPT.app executable path
 5. helper tree 只用于发现、归属验证和优雅关闭后的残留检查。
 6. 等待优雅关闭结束后重新扫描。若仍有残留，普通 stop 报告未完全停止，不扩大信号目标。
 7. 只有显式执行 `cpr stop <profile> --force` 时，才允许对仍然残留的进程发送 `SIGKILL`；发送前必须再次确认每个进程属于目标 profile。
-8. 最终再次扫描，确认目标 profile 已不存在，同时确认其他 profile 的 PID 仍存活。
+8. 所有成功路径在返回前都执行一次新的最终扫描，确认目标主进程和有明确目标归属的残留都不存在，同时确认初始时运行的其他 configured profiles 的 PID、启动时间、executable path 和 exact `user_data_dir` identity 未改变。
+
+Crashpad 或其他 helper 如果只有共享 bundle 路径、没有足够的目标归属证据，会保持不动，不会因为进程名或 executable 相同而被强杀。反之，已通过初始快照和 ancestry/argv 证据确认属于目标的残留，可能使普通 stop 报告 incomplete；只有显式 `--force` 才会逐个重新校验后尝试 `SIGKILL`。
 
 由于 v0.1 的路径由 profile id 自动派生，不同 profile 不会共享同一个 `user_data_dir` 或 `codex_home`。如果未来支持路径覆盖，必须保留相同的唯一性校验。
 
@@ -272,12 +273,12 @@ ChatGPT.app executable path
 - 两个实例可以同时访问本地项目。
 - `--proxy-server`、`HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY` 全部从同一个 profile `proxy` 值派生。
 - 启动后能严格验证目标 executable path 和 exact `--user-data-dir`。
-- `CODEX_HOME` 隔离通过真实 integration tests 验证，而不是作为复杂的 runtime launch proof。
+- `CODEX_HOME` 隔离通过可选的真实 Auth / `CODEX_HOME` integration check 验证，而不是作为复杂的 runtime launch proof。
 
 ### List
 
 - `list` 能显示 profile、主 PID、启动时间、数据目录、Codex 目录和代理摘要。
-- 能识别 ChatGPT 主进程及其 helper tree。
+- 能识别配置 profile 的 ChatGPT 主进程；helper 归属只在 stop 的残留检查中按保守规则评估，不由 `list` 输出完整 helper tree。
 - Manager 退出后再次运行 `list`，仍能正确发现存活实例。
 - 支持机器可读的 `--json` 输出。
 - 不依赖过期 PID 文件或持久化运行状态。
@@ -291,6 +292,7 @@ ChatGPT.app executable path
 - 强制停止必须显式使用 `--force`，且只允许终止发送信号前再次校验通过的残留进程。
 - 身份有歧义时宁可失败，也不发送信号。
 - 停止完成后重新扫描确认目标进程已消失。
+- 最终 fresh scan 还必须确认目标归属残留已消失，并确认初始运行的其他 profile identity 未改变。
 
 ## Technical risks
 
@@ -300,7 +302,7 @@ ChatGPT.app executable path
 
 ### 2. LaunchServices 的环境变量继承不稳定
 
-`--proxy-server` 和环境变量的实际继承行为可能随应用版本变化。v0.1 不把 `CODEX_HOME` 的运行时继承证明作为 launch 硬条件，而是用真实集成测试验证隔离结果。
+`--proxy-server` 和环境变量的实际继承行为可能随应用版本变化。manager 会先 scrub inherited proxy 变量，再把 profile 的单一 proxy 值注入目标命令环境；v0.1 不把 `CODEX_HOME` 的运行时继承证明作为 launch 硬条件，而是用真实集成测试验证隔离结果。
 
 ### 3. PID 复用和进程树变化导致停止风险
 
