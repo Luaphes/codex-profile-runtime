@@ -55,10 +55,10 @@ An optional proxy is configured on the profile itself:
 ```json
 {
   "profiles": {
-    "ninibin": {
+    "personal": {
       "proxy": "socks5://127.0.0.1:18081"
     },
-    "lucas": {}
+    "work": {}
   }
 }
 ```
@@ -71,20 +71,20 @@ Runtime paths are derived automatically from the profile id. Do not add `codex_h
 
 ```bash
 cpr validate
-cpr launch ninibin
+cpr launch personal
 cpr list
 cpr list --json
-cpr stop ninibin
-cpr stop ninibin --force
+cpr stop personal
+cpr stop personal --force
 ```
 
 For development or tests, any command that loads configuration accepts a simple override:
 
 ```bash
 cpr validate --config ./test-config.json
-cpr launch ninibin --config ./test-config.json
+cpr launch personal --config ./test-config.json
 cpr list --config ./test-config.json
-cpr stop ninibin --config ./test-config.json
+cpr stop personal --config ./test-config.json
 ```
 
 ## Runtime layout
@@ -141,7 +141,7 @@ There is no separate `http_proxy`, `no_proxy`, or arbitrary environment configur
 - Helper or Crashpad processes may survive a graceful `SIGTERM`.
 - Normal stop can therefore report an incomplete shutdown.
 - `--force` is intentionally conservative and may leave ambiguous processes untouched.
-- `CODEX_HOME` inheritance is covered by integration behavior rather than used as process identity proof.
+- `CODEX_HOME` inheritance is not used as process identity proof; use the optional manual Auth / `CODEX_HOME` isolation check in [`docs/integration-smoke.md`](docs/integration-smoke.md) when validating a real login flow.
 - There is no provider switching, ccSwitch integration, GUI, daemon, workspace manager, or auth/session migration.
 
 ## Architecture

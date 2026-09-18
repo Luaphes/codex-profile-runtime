@@ -8,7 +8,7 @@ Build the binary first:
 go build -o ./bin/cpr ./cmd/cpr
 ```
 
-Create a disposable configuration for the smoke run. Use a fresh temporary runtime root and the reserved temporary profile name `smoke-test`; do not use an existing user profile such as `ninibin`, `lucas`, `personal`, or `work`.
+Create a disposable configuration for the smoke run. Use a fresh temporary runtime root and the reserved temporary profile name `smoke-test`; do not use any existing user profile.
 
 ```bash
 smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/cpr-smoke.XXXXXX")"
@@ -94,6 +94,17 @@ Verify that unrelated ChatGPT instances remain running. A helper or Crashpad pro
 The standard integration checklist does not require a real `SIGKILL`. Force semantics are primarily covered by the unit tests and their injectable process/signal fixtures.
 
 If a contributor separately chooses to test force behavior, they must create a new disposable profile and runtime root, verify ownership immediately before the test, and obtain explicit authorization for any real `SIGKILL`. Never use a broad process-name kill. Do not add an automatic force script to the repository.
+
+## Optional E. Auth / `CODEX_HOME` isolation check
+
+This is an optional, interactive check for a contributor who explicitly wants to validate real login-state placement. It is not part of the standard non-interactive B+C smoke and must use the same disposable `smoke-test` profile and temporary runtime root.
+
+1. Before login, record only metadata for the existing `~/.codex/auth.json` if it exists (existence, size, inode, and modification time). Do not print or read its contents.
+2. Complete the normal login flow in the disposable ChatGPT Desktop instance. Do not copy any auth, session, cookie, or token data.
+3. Inspect only directory names and file metadata under `<temporary-root>/runtime/profiles/smoke-test/codex-home`; do not dump or parse auth/state contents. Confirm that the expected profile-specific auth/state appears under this disposable `CODEX_HOME` when the current ChatGPT/Codex build writes such state.
+4. Confirm that the original `~/.codex/auth.json` remains absent or has identical metadata after the check.
+
+This check is environment- and application-version-sensitive. A failure is evidence that needs investigation; it is not a reason to weaken process identity or safe-stop checks.
 
 ## Cleanup and reporting
 

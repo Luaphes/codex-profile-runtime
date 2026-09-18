@@ -75,7 +75,7 @@ v0.1 只保留已经人工验证过的一个启动路径：使用 `open -n ... -
 
 启动后必须严格验证：目标进程的 executable path 属于预期的 `ChatGPT.app`，且 argv 中包含精确匹配的 `--user-data-dir`。不能因为 `open` 返回成功，就直接把 profile 标记为 running。
 
-v0.1 不要求把“目标进程继承了 `CODEX_HOME`”作为启动成功的硬条件。`CODEX_HOME` 的隔离通过真实 ChatGPT/Codex 集成测试验证；进程识别仍以 executable path 和 exact `--user-data-dir` 为准。
+v0.1 不要求把“目标进程继承了 `CODEX_HOME`”作为启动成功的硬条件。`CODEX_HOME` 的实际 auth/state 隔离需要通过可选的真实 Auth / `CODEX_HOME` integration check 验证；进程识别仍以 executable path 和 exact `--user-data-dir` 为准。
 
 环境变量只注入目标启动上下文，不修改当前 shell 或系统级全局环境。v0.1 不提供 direct-exec fallback；只有后续证据表明单一启动路径不足时，才重新评估。
 
@@ -226,7 +226,7 @@ ChatGPT.app executable path
 
 如果使用 `open -n`，Manager 不应依赖 `open` 的 PID，因为它很快退出。应在启动后轮询进程表，直到找到带有精确 `user_data_dir` 的 ChatGPT 主进程；超时则启动失败。
 
-启动验证严格要求 executable path 和 exact `--user-data-dir`；不把运行时 `CODEX_HOME` 环境继承证明作为 launch 成功条件。`CODEX_HOME` 隔离由 integration tests 覆盖。
+启动验证严格要求 executable path 和 exact `--user-data-dir`；不把运行时 `CODEX_HOME` 环境继承证明作为 launch 成功条件。需要真实 auth/state 证据时，使用 integration smoke 文档中的可选人工检查。
 
 ## Safe stop strategy
 
@@ -273,7 +273,7 @@ Crashpad 或其他 helper 如果只有共享 bundle 路径、没有足够的目�
 - 两个实例可以同时访问本地项目。
 - `--proxy-server`、`HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY` 全部从同一个 profile `proxy` 值派生。
 - 启动后能严格验证目标 executable path 和 exact `--user-data-dir`。
-- `CODEX_HOME` 隔离通过真实 integration tests 验证，而不是作为复杂的 runtime launch proof。
+- `CODEX_HOME` 隔离通过可选的真实 Auth / `CODEX_HOME` integration check 验证，而不是作为复杂的 runtime launch proof。
 
 ### List
 
