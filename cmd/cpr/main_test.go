@@ -25,14 +25,14 @@ func TestRunValidateWithConfigOverride(t *testing.T) {
 	}
 }
 
-func TestRunRejectsUnimplementedCommand(t *testing.T) {
+func TestRunRejectsStopMissingProfile(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"stop", "ninibin"}, &stdout, &stderr)
+	code := run([]string{"stop"}, &stdout, &stderr)
 	if code == 0 {
-		t.Fatal("run() unexpectedly accepted an unimplemented command")
+		t.Fatal("run() unexpectedly accepted a missing stop profile")
 	}
-	if !strings.Contains(stderr.String(), "usage: cpr validate") {
-		t.Fatalf("stderr = %q, want validate usage", stderr.String())
+	if !strings.Contains(stderr.String(), "profile is required") {
+		t.Fatalf("stderr = %q, want missing profile error", stderr.String())
 	}
 }
 
@@ -78,5 +78,21 @@ func TestParseListArgsSupportsJSONAndConfig(t *testing.T) {
 func TestParseListArgsRejectsUnexpectedArguments(t *testing.T) {
 	if _, _, err := parseListArgs([]string{"profile"}); err == nil {
 		t.Fatal("parseListArgs() unexpectedly accepted positional argument")
+	}
+}
+
+func TestParseStopArgsSupportsForceAndConfig(t *testing.T) {
+	profile, force, configPath, err := parseStopArgs([]string{"--force", "ninibin", "--config=./test-config.json"})
+	if err != nil {
+		t.Fatalf("parseStopArgs() error = %v", err)
+	}
+	if profile != "ninibin" || !force || configPath != "./test-config.json" {
+		t.Fatalf("parseStopArgs() = (%q, %t, %q), want (ninibin, true, ./test-config.json)", profile, force, configPath)
+	}
+}
+
+func TestParseStopArgsRejectsUnknownOption(t *testing.T) {
+	if _, _, _, err := parseStopArgs([]string{"ninibin", "--kill-all"}); err == nil {
+		t.Fatal("parseStopArgs() unexpectedly accepted unknown option")
 	}
 }

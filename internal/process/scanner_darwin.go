@@ -81,6 +81,11 @@ func NewSnapshotter() Snapshotter {
 	return darwinScanner{uid: uint32(os.Getuid())}
 }
 
+// NewInspector returns the read-only process capability used by safe stop.
+func NewInspector() Inspector {
+	return darwinScanner{uid: uint32(os.Getuid())}
+}
+
 func (s darwinScanner) FindMain(executablePath, userDataDir string) (Info, bool, error) {
 	processes, err := s.Snapshot(executablePath)
 	if err != nil {
@@ -110,23 +115,70 @@ func (s darwinScanner) Snapshot(executablePath string) ([]Info, error) {
 			continue
 		}
 
-		ppid, startTime, err := processMetadata(pid)
+		info, err := inspectProcess(pid)
 		if err != nil {
 			continue
 		}
-		args, err := processArgs(pid)
-		if err != nil {
-			continue
-		}
-		processes = append(processes, Info{
-			PID:            pid,
-			PPID:           ppid,
-			StartTime:      startTime,
-			ExecutablePath: executable,
-			Args:           args,
-		})
+		processes = append(processes, info)
 	}
 	return processes, nil
+}
+
+func (s darwinScanner) SnapshotAll() ([]Info, error) {
+	pids, err := listCurrentUserPIDs(s.uid)
+	if err != nil {
+		return nil, err
+	}
+
+	processes := make([]Info, 0, len(pids))
+	for _, pid := range pids {
+		info, err := inspectProcess(pid)
+		if err != nil {
+			continue
+		}
+		processes = append(processes, info)
+	}
+	return processes, nil
+}
+
+func (s darwinScanner) Revalidate(expected Info) (Info, bool, error) {
+	if expected.PID <= 0 {
+		return Info{}, false, fmt.Errorf("invalid process PID %d", expected.PID)
+	}
+	if uid := int(C.cpr_pid_uid(C.pid_t(expected.PID))); uid < 0 || uint32(uid) != s.uid {
+		return Info{}, false, nil
+	}
+
+	current, err := inspectProcess(expected.PID)
+	if err != nil {
+		return Info{}, false, nil
+	}
+	if !SameIdentity(expected, current) {
+		return current, false, nil
+	}
+	return current, true, nil
+}
+
+func inspectProcess(pid int) (Info, error) {
+	executable, err := processPath(pid)
+	if err != nil {
+		return Info{}, err
+	}
+	ppid, startTime, err := processMetadata(pid)
+	if err != nil {
+		return Info{}, err
+	}
+	args, err := processArgs(pid)
+	if err != nil {
+		return Info{}, err
+	}
+	return Info{
+		PID:            pid,
+		PPID:           ppid,
+		StartTime:      startTime,
+		ExecutablePath: executable,
+		Args:           args,
+	}, nil
 }
 
 func listCurrentUserPIDs(uid uint32) ([]int, error) {
