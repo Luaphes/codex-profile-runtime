@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build macOS ${{ matrix.goarch }} binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 is the Apple Silicon runner; macos-15-intel is Intel.
+          - runner: macos-14
+            goarch: arm64
+          - runner: macos-15-intel
+            goarch: amd64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify native Darwin cgo toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = "darwin"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
+          test "$(go env CGO_ENABLED)" = "1"
+
+      - name: Check formatting
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="cpr_darwin_${{ matrix.goarch }}"
+          go build -o "$RUNNER_TEMP/$binary" ./cmd/cpr
+          test -x "$RUNNER_TEMP/$binary"
+          "$RUNNER_TEMP/$binary" validate --help
+          file "$RUNNER_TEMP/$binary"
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpr-darwin-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/cpr_darwin_${{ matrix.goarch }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
+
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release-assets"
+          test -f cpr_darwin_arm64
+          test -f cpr_darwin_amd64
+          sha256sum cpr_darwin_arm64 cpr_darwin_amd64 > SHA256SUMS
+          ls -l cpr_darwin_arm64 cpr_darwin_amd64 SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/release-assets/cpr_darwin_arm64" \
+            "$RUNNER_TEMP/release-assets/cpr_darwin_amd64" \
+            "$RUNNER_TEMP/release-assets/SHA256SUMS" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
