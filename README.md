@@ -24,17 +24,64 @@ This project is a runtime glue layer. It is not a Codex replacement and it is no
 
 Non-macOS builds keep the CLI and tests buildable, but process discovery and signaling return an explicit unsupported-platform error.
 
-## Build
+## Install
+
+Download the binary for your Mac (`cpr_darwin_arm64` for Apple Silicon or
+`cpr_darwin_amd64` for Intel) and `SHA256SUMS` from the
+[latest GitHub Release](https://github.com/Luaphes/codex-profile-runtime/releases/latest).
+For example, on Apple Silicon:
 
 ```bash
-go build -o ./bin/cpr ./cmd/cpr
+asset=cpr_darwin_arm64 # use cpr_darwin_amd64 on Intel
+curl -fLO "https://github.com/Luaphes/codex-profile-runtime/releases/latest/download/$asset"
+curl -fLO https://github.com/Luaphes/codex-profile-runtime/releases/latest/download/SHA256SUMS
+grep "  $asset$" SHA256SUMS | shasum -a 256 -c -
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$asset" "$HOME/.local/bin/cpr"
 ```
 
-The resulting binary is `./bin/cpr`.
+There is no package-manager installer yet.
 
-## Installation and releases
+Alternatively, build from source with Go 1.23 or newer:
 
-For now, build from source with the command above. After the release workflow is merged and a `v*` tag is created, GitHub Releases will provide macOS binaries for the supported architectures. This PR does not publish a release or add an installer.
+```bash
+git clone https://github.com/Luaphes/codex-profile-runtime.git
+cd codex-profile-runtime
+go build -o ./bin/cpr ./cmd/cpr
+mkdir -p "$HOME/.local/bin"
+install -m 755 ./bin/cpr "$HOME/.local/bin/cpr"
+```
+
+Make sure `$HOME/.local/bin` is on your `PATH`, or run `./bin/cpr` from the
+source checkout. Releases provide separate macOS binaries for Apple Silicon and
+Intel; they do not install or update `cpr` automatically.
+
+## Quick start
+
+Create the default configuration file with two example profiles:
+
+```bash
+config_dir="$HOME/Library/Application Support/CodexProfileRuntime"
+mkdir -p "$config_dir"
+cat > "$config_dir/config.json" <<'JSON'
+{
+  "profiles": {
+    "personal": {},
+    "work": {}
+  }
+}
+JSON
+
+cpr validate
+cpr launch personal
+cpr launch work
+cpr list
+```
+
+Sign in separately in each new ChatGPT Desktop window. To close one profile,
+run `cpr stop personal`. Keep the profile names stable: each name determines
+its own `CODEX_HOME` and Electron user-data directory. Starting with a new name
+creates a fresh profile.
 
 ## Configuration
 
@@ -128,6 +175,13 @@ When a profile is first launched, sign in normally inside that profile's ChatGPT
 ## Existing projects
 
 Project directories are independent of `CODEX_HOME` and Electron user data. A user may open a personal repository from one profile and a work repository from another. `cpr` does not move or manage project files.
+
+A new profile starts with its own local app and Codex state. Existing tasks,
+conversation history, `config.toml`, skills, and memory from another profile do
+not appear automatically. Opening the same repository gives access to its
+files, but does not restore the old task list or conversation context. Back up
+existing state before attempting any separate migration; `cpr` does not provide
+a migration command.
 
 ## Proxy semantics
 
