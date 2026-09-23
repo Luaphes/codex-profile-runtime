@@ -1,6 +1,20 @@
 # Codex Profile Runtime
 
-A small macOS runtime manager for running multiple isolated ChatGPT/Codex Desktop profiles.
+**One Mac. Multiple ChatGPT Desktop profiles, each with its own app state.**<br>
+**一台 Mac，多个 ChatGPT 桌面 profile，各自使用独立的应用状态。**
+
+[English](README.md) · [简体中文](README.zh-CN.md) · [Releases](https://github.com/Luaphes/codex-profile-runtime/releases) · [MIT License](LICENSE)
+
+![cpr launches separate desktop profiles with their own Codex and Electron data directories](docs/assets/profile-runtime.svg)
+
+`cpr` is a small macOS CLI that launches, lists, and safely stops named ChatGPT
+Desktop profiles. Each profile gets a dedicated `CODEX_HOME`, Electron
+`--user-data-dir`, and optional proxy. It keeps app state separate; it is not
+an operating-system sandbox or an account switcher.
+
+```text
+cpr launch personal    cpr launch work    cpr list
+```
 
 ## What it does
 
@@ -170,7 +184,7 @@ Profile identity is based on the target ChatGPT executable path and an exact `--
 
 `cpr` does not read, copy, or migrate `auth.json`, sessions, cookies, or tokens.
 
-When a profile is first launched, sign in normally inside that profile's ChatGPT Desktop instance. Do not copy `~/.codex/auth.json` or other state between profiles.
+When a profile is first launched, sign in normally inside that profile's ChatGPT Desktop instance. Do not copy `~/.codex/auth.json` or browser login data between profiles. Any separate migration of non-auth state needs a backup and version-specific review.
 
 ## Existing projects
 
