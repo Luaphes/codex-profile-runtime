@@ -296,8 +296,14 @@ func TestServiceWaitsForVerifiedProcess(t *testing.T) {
 	if info.PID != 54321 {
 		t.Fatalf("PID = %d, want 54321", info.PID)
 	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("runner calls = %d, want 1", len(runner.calls))
+	if len(runner.calls) != 2 {
+		t.Fatalf("runner calls = %d, want guard then launch", len(runner.calls))
+	}
+	if !equalStrings(runner.calls[0].Args, []string{"features", "disable", "workspace_dependencies"}) || runner.calls[1].Path != openCommandPath {
+		t.Fatalf("unexpected command order: %#v", runner.calls)
+	}
+	if got := envMap(runner.calls[0].Env)["CODEX_HOME"]; got != canonicalPaths.CodexHome {
+		t.Fatalf("guard targeted %q, want canonical profile %q", got, canonicalPaths.CodexHome)
 	}
 }
 
@@ -365,6 +371,13 @@ func testApp(t *testing.T) string {
 	}
 	if err := os.WriteFile(executable, []byte("test executable"), 0o700); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cli := filepath.Join(appPath, "Contents", "Resources", "codex-cli", "CodexCLI.app", "Contents", "MacOS", "codex")
+	if err := os.MkdirAll(filepath.Dir(cli), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cli, []byte("test bundled CLI"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	return appPath
 }

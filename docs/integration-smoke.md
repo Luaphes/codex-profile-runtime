@@ -106,6 +106,34 @@ This is an optional, interactive check for a contributor who explicitly wants to
 
 This check is environment- and application-version-sensitive. A failure is evidence that needs investigation; it is not a reason to weaken process identity or safe-stop checks.
 
+## F. Shared runtime download protection
+
+The automated launch tests require the guard to run before `open`, target the
+canonical profile path, and prevent launch when the bundled CLI is missing,
+not executable, fails, or times out. They also check that `HOME` is unchanged.
+
+To test the installed app's real configuration writer without starting any
+desktop instance or downloading a runtime:
+
+```bash
+CPR_TEST_CODEX_APP=/Applications/ChatGPT.app go test ./internal/launch -run TestBundledWorkspaceGuard -v
+```
+
+This opt-in test uses two temporary profiles and verifies that only the intended
+feature changes, including after a second, idempotent application.
+
+On a disposable profile, check that `config.toml` contains
+`[features]` / `workspace_dependencies = false` after launch, and that unrelated
+settings remain intact. Stop it normally, change the feature to `true`, then
+launch it again through `cpr`: the guard must restore `false` before desktop
+startup. Repeat with a second disposable profile; neither may enable automatic
+workspace-runtime management. Do not provoke real archive downloads to test
+this regression, and do not use production profile credentials.
+
+The setting also disables the built-in workspace-dependency tool. Existing
+Python/Node runtime files should remain unchanged. This is a launch policy,
+not a cache-isolation mechanism or a guarantee about future app versions.
+
 ## Cleanup and reporting
 
 After confirming that the disposable instance is closed, remove only the temporary smoke root if desired. Do not remove any default runtime root or existing user profile.

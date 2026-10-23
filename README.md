@@ -24,6 +24,7 @@ cpr launch personal    cpr launch work    cpr list
 - derives an isolated `CODEX_HOME` for each profile;
 - derives an isolated Electron `--user-data-dir` for each profile;
 - applies an optional per-profile proxy;
+- blocks the shared workspace-runtime download loop before each new launch;
 - discovers running profiles from the live process table;
 - stops one profile using conservative identity and signal checks.
 
@@ -33,6 +34,7 @@ This project is a runtime glue layer. It is not a Codex replacement and it is no
 
 - macOS for runtime functionality;
 - the official `ChatGPT.app` installed, normally at `/Applications/ChatGPT.app`;
+- its bundled Codex CLI with the `workspace_dependencies` feature setting;
 - Go `1.23`, as declared in [`go.mod`](go.mod), for building and testing;
 - cgo and the macOS `libproc` APIs for live process discovery and stop support.
 
@@ -96,6 +98,30 @@ Sign in separately in each new ChatGPT Desktop window. To close one profile,
 run `cpr stop personal`. Keep the profile names stable: each name determines
 its own `CODEX_HOME` and Electron user-data directory. Starting with a new name
 creates a fresh profile.
+
+## Shared runtime download protection
+
+Separate profiles still share the desktop app's
+`~/.cache/codex-runtimes/codex-primary-runtime` directory. If their desktop
+instances request different bundle versions, each hourly update can overwrite
+the other's installation and download the full archive again.
+
+Before launching a new instance, `cpr` runs the bundled Codex CLI to persist
+`features.workspace_dependencies = false` in that profile's `config.toml`.
+It reapplies this setting on every launch. If the bundled CLI is unavailable,
+the feature is unsupported, or the config update fails or times out, `cpr`
+does not start the desktop instance. Existing running instances are not changed
+by a rejected duplicate launch.
+
+This disables the desktop's bundled workspace-dependency tools and automatic
+runtime management. Already installed runtime files are retained. It does not
+redirect `HOME`, isolate this shared cache, patch the app, or delete any runtime.
+It also does not stop normal ChatGPT application updates. Instances launched
+outside `cpr` are outside this launch guard, and changing the feature back to
+`true` while an instance is running removes the protection for that instance.
+
+When upgrading from an older `cpr`, relaunch each profile through the updated
+binary to apply the setting. See the [offline regression checks](docs/integration-smoke.md#f-shared-runtime-download-protection).
 
 ## Configuration
 

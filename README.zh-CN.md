@@ -183,6 +183,24 @@ profile 身份由目标 ChatGPT 可执行文件路径和精确的 `--user-data-d
 
 ## 已知限制
 
+### 共享运行环境下载保护
+
+不同 profile 的 `CODEX_HOME` 和 Electron 数据目录虽然独立，桌面程序仍共用
+`~/.cache/codex-runtimes/codex-primary-runtime`。如果两个实例要求不同版本，
+各自的每小时更新会覆盖对方的安装并反复下载完整安装包。
+
+现在每次启动新实例前，`cpr` 都调用应用自带的 Codex CLI，在目标 profile 的
+`config.toml` 中写入 `features.workspace_dependencies = false`。每次启动都会重新
+应用此设置；CLI 缺失、不支持该设置、写入失败或超时，都会阻止桌面启动。
+重复启动一个已经运行的 profile 仍会被拒绝，不会修改它的设置。
+
+此保护会关闭桌面的内置工作区依赖工具及自动运行环境管理，保留已安装的运行环境
+文件，不重定向 `HOME`、修改签名程序或删除缓存，也不阻止 ChatGPT 应用本身的更新。
+绕过 `cpr` 启动的实例不受启动守卫保护；在运行期间重新开启该功能也会解除保护。
+从旧版升级后，应通过新版 `cpr` 重新启动各 profile，以应用设置。
+
+### 其他限制
+
 - 隔离的是应用状态，不是系统级沙箱。钥匙串、文件系统、Git、SSH、IPC 等 macOS 状态仍可能共享。
 - ChatGPT 或 Electron 更新可能改变启动参数、应用结构或进程行为。
 - 普通 `SIGTERM` 后，helper 或 Crashpad 进程可能残留，工具可能报告停止未完成。
