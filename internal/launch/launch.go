@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -25,11 +26,12 @@ var (
 	ErrVerificationTimeout = errors.New("launch verification timed out")
 )
 
-// CommandSpec is the argv and environment explicitly prepared for open(1).
+// CommandSpec describes a bounded preflight or the desktop open(1) command.
 type CommandSpec struct {
-	Path string
-	Args []string
-	Env  []string
+	Path    string
+	Args    []string
+	Env     []string
+	Timeout time.Duration
 }
 
 // CommandRunner executes one already-tokenized command.
@@ -45,9 +47,19 @@ func NewCommandRunner() CommandRunner {
 }
 
 func (execRunner) Run(spec CommandSpec) error {
-	command := exec.Command(spec.Path, spec.Args...)
+	ctx := context.Background()
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+	command := exec.CommandContext(ctx, spec.Path, spec.Args...)
 	command.Env = mergeEnvironment(os.Environ(), spec.Env)
-	return command.Run()
+	err := command.Run()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 var scrubbedProxyEnvironmentKeys = map[string]struct{}{
@@ -140,6 +152,17 @@ func (s Service) Launch(appPath, runtimeRoot string, profile config.ResolvedProf
 	}
 	if found {
 		return current, fmt.Errorf("%w: %q", ErrAlreadyRunning, profile.ID)
+	}
+
+	// CODEX_HOME and Electron user data do not isolate the desktop installer's
+	// ~/.cache/codex-runtimes directory. Disable its automatic management before
+	// starting another profile, including when a user has re-enabled it.
+	guard, err := BuildWorkspaceDependencyGuard(appPath, profile)
+	if err != nil {
+		return process.Info{}, err
+	}
+	if err := s.Runner.Run(guard); err != nil {
+		return process.Info{}, fmt.Errorf("disable shared workspace dependency downloads for profile %q (ChatGPT was not started): %w", profile.ID, err)
 	}
 
 	spec, err := BuildOpenCommand(appPath, profile)

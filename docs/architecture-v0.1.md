@@ -75,6 +75,13 @@ v0.1 只保留已经人工验证过的一个启动路径：使用 `open -n ... -
 
 启动后必须严格验证：目标进程的 executable path 属于预期的 `ChatGPT.app`，且 argv 中包含精确匹配的 `--user-data-dir`。不能因为 `open` 返回成功，就直接把 profile 标记为 running。
 
+共享运行环境保护：在确认目标 profile 尚未运行之后、执行 `open` 之前，调用应用
+自带 Codex CLI 的 `features disable workspace_dependencies`，仅向该命令传入目标
+profile 的 `CODEX_HOME`。此设置关闭使用系统用户级共享缓存的自动依赖管理，避免
+不同实例的版本目标互相覆盖并周期性重下载。使用官方配置写入器保留其余 TOML
+设置；不重定向 `HOME`、解析认证数据或修改应用包。命令有 15 秒时限，缺失、失败
+或超时一律阻止启动。已经运行的 profile 仍按原重复启动拒绝流程处理。
+
 v0.1 不要求把“目标进程继承了 `CODEX_HOME`”作为启动成功的硬条件。`CODEX_HOME` 的实际 auth/state 隔离需要通过可选的真实 Auth / `CODEX_HOME` integration check 验证；进程识别仍以 executable path 和 exact `--user-data-dir` 为准。
 
 环境变量只注入目标启动上下文，不修改当前 shell 或系统级全局环境。v0.1 不提供 direct-exec fallback；只有后续证据表明单一启动路径不足时，才重新评估。
