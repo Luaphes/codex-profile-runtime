@@ -1,5 +1,7 @@
 # Codex Profile Runtime
 
+> **已于 2026-10-27 退役。** 本仓库作为历史实验归档，不再维护。原有多账号并行使用的需求已经结束。下方保留历史用法，使用前请先阅读[退役决定、隔离边界与故障复盘](docs/retirement.md#中文复盘)。
+
 **一台 Mac，多个 ChatGPT 桌面 profile，各自使用独立的应用状态。**<br>
 **One Mac. Multiple ChatGPT Desktop profiles, each with its own app state.**
 

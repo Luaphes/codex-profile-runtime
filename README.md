@@ -1,5 +1,7 @@
 # Codex Profile Runtime
 
+> **Retired on 2026-10-27.** This repository is retained as a historical experiment and is no longer maintained. The original multi-account need has ended. Read the [retirement decision, isolation limits, and incident lessons](docs/retirement.md) before using the historical instructions below.
+
 **One Mac. Multiple ChatGPT Desktop profiles, each with its own app state.**<br>
 **一台 Mac，多个 ChatGPT 桌面 profile，各自使用独立的应用状态。**
 
